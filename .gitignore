@@ -1,0 +1,36 @@
+# Binaries and build output
+bin/
+dist/
+build/
+/tmux-parator
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+
+# Go build and coverage artifacts
+*.out
+coverage.out
+coverage.html
+
+# Go workspace files
+go.work
+go.work.sum
+
+# Dependency/vendor directories
+vendor/
+
+# Environment and local config
+.env
+.env.*
+!.env.example
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
