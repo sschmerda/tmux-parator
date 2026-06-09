@@ -1,0 +1,77 @@
+[ui]
+theme = "shades-of-purple"
+popup_width = "90%"
+popup_height = "90%"
+
+[ui.glyphs]
+repo = ""
+subdir = ""
+worktree = "󰙅"
+manual = ""
+
+[ui.glyph_colors]
+repo = "#f14e32"
+subdir = "#7aa2f7"
+worktree = "#9ece6a"
+manual = "#a599e9"
+
+[ui.columns.chip]
+show = true
+width = 12
+max_width = 12
+
+[ui.columns.root]
+show = true
+width = 12
+max_width = 20
+
+[ui.columns.name]
+show = true
+width = 28
+max_width = 40
+
+[ui.columns.path]
+show = true
+width = 0
+max_width = 0
+include_root = true
+
+[discovery]
+backend = "auto"
+skip_hidden = true
+skip_gitignored = true
+skip_dirs = ["node_modules", "vendor", "dist", "build"]
+
+[path_search]
+enabled = true
+backend = "auto"
+roots = ["~"]
+max_depth = 12
+skip_hidden = true
+skip_gitignored = true
+skip_dirs = ["node_modules", ".git", "vendor", "dist", "build", ".cache", ".venv", "__pycache__"]
+limit = 5000
+
+[[roots]]
+name = "projects"
+path = "~/projects"
+mode = "repo"
+glyph = ""
+glyph_color = "#f14e32"
+depth = 1
+max_depth = 4
+skip_hidden = true
+skip_gitignored = true
+skip_dirs = ["node_modules", "vendor", "dist", "build"]
+
+[[roots]]
+name = "scratch"
+path = "~/scratch"
+mode = "subdir"
+glyph = ""
+glyph_color = "#7aa2f7"
+depth = 2
+max_depth = 0
+skip_hidden = true
+skip_gitignored = true
+skip_dirs = ["node_modules", "vendor", "dist", "build"]
