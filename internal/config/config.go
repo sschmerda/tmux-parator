@@ -33,6 +33,7 @@ type UI struct {
 type Glyphs struct {
 	Repo     string `toml:"repo"`
 	Subdir   string `toml:"subdir"`
+	Path     string `toml:"path"`
 	Worktree string `toml:"worktree"`
 	Manual   string `toml:"manual"`
 }
@@ -40,6 +41,7 @@ type Glyphs struct {
 type GlyphColors struct {
 	Repo     string `toml:"repo"`
 	Subdir   string `toml:"subdir"`
+	Path     string `toml:"path"`
 	Worktree string `toml:"worktree"`
 	Manual   string `toml:"manual"`
 }
@@ -307,6 +309,9 @@ func mergeGlyphs(raw Glyphs, fallback Glyphs) Glyphs {
 	if raw.Subdir != "" {
 		glyphs.Subdir = raw.Subdir
 	}
+	if raw.Path != "" {
+		glyphs.Path = raw.Path
+	}
 	if raw.Worktree != "" {
 		glyphs.Worktree = raw.Worktree
 	}
@@ -323,6 +328,9 @@ func mergeGlyphColors(raw GlyphColors, fallback GlyphColors) GlyphColors {
 	}
 	if raw.Subdir != "" {
 		colors.Subdir = raw.Subdir
+	}
+	if raw.Path != "" {
+		colors.Path = raw.Path
 	}
 	if raw.Worktree != "" {
 		colors.Worktree = raw.Worktree
@@ -394,6 +402,8 @@ func glyphForMode(mode string, glyphs Glyphs) string {
 	switch strings.TrimSpace(mode) {
 	case "repo":
 		return glyphs.Repo
+	case "path":
+		return glyphs.Path
 	case "worktree":
 		return glyphs.Worktree
 	default:
@@ -407,6 +417,9 @@ func normalizeGlyphs(glyphs Glyphs) Glyphs {
 	}
 	if glyphs.Subdir == "" {
 		glyphs.Subdir = "\uf0c9"
+	}
+	if glyphs.Path == "" {
+		glyphs.Path = "\U000f024b"
 	}
 	if glyphs.Worktree == "" {
 		glyphs.Worktree = "\U000f0655"
@@ -423,6 +436,9 @@ func normalizeGlyphColors(colors GlyphColors) GlyphColors {
 	}
 	if colors.Subdir == "" {
 		colors.Subdir = "#7aa2f7"
+	}
+	if colors.Path == "" {
+		colors.Path = "#7dcfff"
 	}
 	if colors.Worktree == "" {
 		colors.Worktree = "#9ece6a"

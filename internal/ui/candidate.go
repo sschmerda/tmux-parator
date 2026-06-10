@@ -254,7 +254,7 @@ func (c candidate) sessionMetadata() tmux.SessionMetadata {
 	case candidatePath:
 		return tmux.SessionMetadata{
 			CreatedByParator: true,
-			Kind:             "manual",
+			Kind:             "path",
 			Path:             c.fsPath.Path,
 			BaseName:         c.sessionName(),
 		}

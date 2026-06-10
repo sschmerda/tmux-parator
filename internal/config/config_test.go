@@ -27,10 +27,10 @@ func TestDefaultComesFromEmbeddedTOML(t *testing.T) {
 	if cfg.UI.Theme != "shades-of-purple" {
 		t.Fatalf("theme = %q, want embedded default", cfg.UI.Theme)
 	}
-	if cfg.UI.Glyphs.Repo != "\ue702" || cfg.UI.Glyphs.Subdir == "" || cfg.UI.Glyphs.Worktree == "" || cfg.UI.Glyphs.Manual == "" {
+	if cfg.UI.Glyphs.Repo != "\ue702" || cfg.UI.Glyphs.Subdir == "" || cfg.UI.Glyphs.Path == "" || cfg.UI.Glyphs.Worktree == "" || cfg.UI.Glyphs.Manual == "" {
 		t.Fatalf("glyph defaults not applied: %#v", cfg.UI.Glyphs)
 	}
-	if cfg.UI.GlyphColors.Repo != "#f14e32" || cfg.UI.GlyphColors.Subdir == "" || cfg.UI.GlyphColors.Worktree == "" || cfg.UI.GlyphColors.Manual == "" {
+	if cfg.UI.GlyphColors.Repo != "#f14e32" || cfg.UI.GlyphColors.Subdir == "" || cfg.UI.GlyphColors.Path == "" || cfg.UI.GlyphColors.Worktree == "" || cfg.UI.GlyphColors.Manual == "" {
 		t.Fatalf("glyph color defaults not applied: %#v", cfg.UI.GlyphColors)
 	}
 	if !cfg.UI.Columns.Chip.Show || cfg.UI.Columns.Chip.Width != 12 || cfg.UI.Columns.Chip.MaxWidth != 12 || !cfg.UI.Columns.Root.Show || cfg.UI.Columns.Root.Width != 12 || cfg.UI.Columns.Root.MaxWidth != 20 || !cfg.UI.Columns.Name.Show || cfg.UI.Columns.Name.Width != 28 || cfg.UI.Columns.Name.MaxWidth != 40 || !cfg.UI.Columns.Path.Show || cfg.UI.Columns.Path.MaxWidth != 0 {
@@ -193,10 +193,10 @@ kind = "repo"
 	if cfg.UI.GlyphColors.Repo != "#123456" {
 		t.Fatalf("repo glyph color = %q, want #123456", cfg.UI.GlyphColors.Repo)
 	}
-	if cfg.UI.Glyphs.Subdir == "" || cfg.UI.Glyphs.Worktree == "" || cfg.UI.Glyphs.Manual == "" {
+	if cfg.UI.Glyphs.Subdir == "" || cfg.UI.Glyphs.Path == "" || cfg.UI.Glyphs.Worktree == "" || cfg.UI.Glyphs.Manual == "" {
 		t.Fatalf("partial glyph config did not keep defaults: %#v", cfg.UI.Glyphs)
 	}
-	if cfg.UI.GlyphColors.Subdir == "" || cfg.UI.GlyphColors.Worktree == "" || cfg.UI.GlyphColors.Manual == "" {
+	if cfg.UI.GlyphColors.Subdir == "" || cfg.UI.GlyphColors.Path == "" || cfg.UI.GlyphColors.Worktree == "" || cfg.UI.GlyphColors.Manual == "" {
 		t.Fatalf("partial glyph color config did not keep defaults: %#v", cfg.UI.GlyphColors)
 	}
 	if len(cfg.Roots) != 1 || cfg.Roots[0].Glyph != "R" {

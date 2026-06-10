@@ -529,9 +529,10 @@ func (m Model) updateCreateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeBrowse
 		return m, m.createSessionWithMetadata(name, "", tmux.SessionMetadata{
 			CreatedByParator: true,
-			Kind:             "manual",
+			Kind:             "path",
 			Path:             wd,
-			Glyph:            m.glyphs.Manual,
+			Glyph:            m.glyphs.Path,
+			GlyphColor:       m.glyphColors.Path,
 		})
 	case "backspace", "ctrl+h":
 		if m.createText != "" {
@@ -1792,7 +1793,10 @@ func (m Model) openCandidate(selected candidate) tea.Cmd {
 		metadata := selected.sessionMetadata()
 		metadata.BaseName = selected.sessionName()
 		if selected.kind == candidatePath && metadata.Glyph == "" {
-			metadata.Glyph = m.glyphs.Manual
+			metadata.Glyph = m.glyphs.Path
+		}
+		if selected.kind == candidatePath && metadata.GlyphColor == "" {
+			metadata.GlyphColor = m.glyphColors.Path
 		}
 		return m.createSessionWithMetadata(name, selected.path(), metadata)
 	}
@@ -1846,6 +1850,8 @@ func originLabel(mode string) string {
 		return "repo"
 	case "subdir":
 		return "subdir"
+	case "path":
+		return "path"
 	case "worktree":
 		return "worktree"
 	case "manual":
@@ -1862,6 +1868,9 @@ func normalizeUIGlyphs(glyphs config.Glyphs) config.Glyphs {
 	if glyphs.Subdir == "" {
 		glyphs.Subdir = "\uf0c9"
 	}
+	if glyphs.Path == "" {
+		glyphs.Path = "\U000f024b"
+	}
 	if glyphs.Worktree == "" {
 		glyphs.Worktree = "\U000f0655"
 	}
@@ -1877,6 +1886,9 @@ func normalizeUIGlyphColors(colors config.GlyphColors) config.GlyphColors {
 	}
 	if colors.Subdir == "" {
 		colors.Subdir = "#7aa2f7"
+	}
+	if colors.Path == "" {
+		colors.Path = "#7dcfff"
 	}
 	if colors.Worktree == "" {
 		colors.Worktree = "#9ece6a"
@@ -1975,6 +1987,8 @@ func originGlyph(mode string, glyphs config.Glyphs) string {
 		return glyphs.Repo
 	case "subdir":
 		return glyphs.Subdir
+	case "path":
+		return glyphs.Path
 	case "worktree":
 		return glyphs.Worktree
 	case "manual":
@@ -1994,6 +2008,8 @@ func originGlyphColor(mode string, selected bool, colors config.GlyphColors) lip
 		return lipgloss.Color(colors.Repo)
 	case "subdir":
 		return lipgloss.Color(colors.Subdir)
+	case "path":
+		return lipgloss.Color(colors.Path)
 	case "worktree":
 		return lipgloss.Color(colors.Worktree)
 	case "manual":
@@ -2010,6 +2026,8 @@ func selectedOriginGlyphColor(mode string, colors config.GlyphColors) lipgloss.C
 		return lipgloss.Color(colors.Repo)
 	case "subdir":
 		return lipgloss.Color(colors.Subdir)
+	case "path":
+		return lipgloss.Color(colors.Path)
 	case "worktree":
 		return lipgloss.Color(colors.Worktree)
 	case "manual":
@@ -2495,6 +2513,9 @@ func candidateOrigin(item candidate) string {
 	if item.kind == candidateRoot {
 		return originLabel(rootMode(item.root))
 	}
+	if item.kind == candidatePath {
+		return originLabel("path")
+	}
 	return "manual"
 }
 
@@ -2630,7 +2651,7 @@ func (m Model) commandItems() []commandItem {
 		{ID: commandOpenSelected, Title: "Open selected", Key: "<enter>", Description: "Switch to an existing session or create one for the selected root.", Enabled: ok, DisabledReason: "There is no selected candidate."},
 		{ID: commandOpenLast, Title: "Open last session", Key: "<c-`>", Description: "Switch to tmux's last active session.", Enabled: true},
 		{ID: commandKillSession, Title: "Kill selected session", Key: "<c-k>", Description: "Ask for confirmation before killing the selected tmux session.", Enabled: killReason == "", DisabledReason: killReason},
-		{ID: commandNewSession, Title: "Create session in current path", Key: "<c-n>", Description: "Create a manual session in the current working directory.", Enabled: true},
+		{ID: commandNewSession, Title: "Create session in current path", Key: "<c-n>", Description: "Create a path session in the current working directory.", Enabled: true},
 		{ID: commandPathSearch, Title: "Create session from path", Key: "<c-t>", Description: "Open filesystem path search, then create or switch to a session for the selected path.", Enabled: m.pathConfig.enabled, DisabledReason: "Path search is disabled in config."},
 		{ID: commandToggleHidden, Title: discoveryToggleHiddenTitle(m.discovery.SkipHidden), Key: "<meta-h>", Description: "Toggle whether hidden directories are skipped for configured repos and subdirs.", Enabled: true},
 		{ID: commandToggleIgnored, Title: discoveryToggleIgnoredTitle(m.discovery.SkipGitignored), Key: "<meta-i>", Description: "Toggle whether gitignored directories are skipped for configured repos and subdirs.", Enabled: true},
@@ -2937,7 +2958,7 @@ func renderCreateSession(s styles, value string, appWidth int) string {
 		bodyWidth = 20
 	}
 	lines := []string{
-		s.popupMuted.Render("Create a manual session in the current path."),
+		s.popupMuted.Render("Create a path session in the current path."),
 		"",
 		renderSearchBox("name ❯ ", value, bodyWidth, s),
 		"",
@@ -3402,7 +3423,7 @@ func helpItemsForMode(previous mode) []helpItem {
 		{Key: "<tab>/<s-tab>", Action: "jump sections", Description: "Jump between open sessions and available workspaces."},
 		{Key: "<c-g>", Action: "command overlay", Description: "Open the command overlay for less frequent actions."},
 		{Key: "<c-`>", Action: "open last session", Description: "Switch to tmux's last active session."},
-		{Key: "<c-n>", Action: "create session in path", Description: "Create a manual session in the current working directory."},
+		{Key: "<c-n>", Action: "create session in path", Description: "Create a path session in the current working directory."},
 		{Key: "<c-t>", Action: "create session from path", Description: "Open filesystem path search, then create or switch to a session for the selected path."},
 		{Key: "<c-r>", Action: "reload", Description: "Reload tmux sessions and configured root candidates."},
 		{Key: "<meta-h>", Action: "toggle hidden roots", Description: "Toggle whether hidden directories are skipped for configured repos and subdirs."},

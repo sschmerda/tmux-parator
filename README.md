@@ -61,8 +61,8 @@ Confirmation popups:
 Filtering uses the same weighted, multi-token fuzzy matching style as
 `tmux-dux`. Sessions are shown above configured roots, separated by a divider
 in the unfiltered list. Session rows include an origin chip: ` repo`,
-` subdir`, `󰙅 worktree` for parator-managed workspaces, and ` manual` for
-manual sessions.
+` subdir`, `󰉋 path`, `󰙅 worktree` for parator-managed workspaces, and ` manual`
+for untagged tmux sessions.
 For sessions created by `tmux-parator`, the origin is stored on the tmux
 session with `@tmux-parator.*` user options. That metadata stays with the live
 session if it is renamed and is removed automatically when the session is
@@ -116,7 +116,7 @@ Main search:
   - `available workspaces`
 - `Tab` and `Shift-Tab` jump between visible section starts, both with and
   without a query.
-- The origin chip label is searchable: `repo`, `subdir`, `worktree`, `manual`.
+- The origin chip label is searchable: `repo`, `subdir`, `path`, `worktree`, `manual`.
 - The root column is searchable:
   - configured candidates use the root `name`, for example `repos`
   - tagged sessions use `@tmux-parator.root`
@@ -269,12 +269,14 @@ popup_height = "90%"
 [ui.glyphs]
 repo = ""
 subdir = ""
+path = "󰉋"
 worktree = "󰙅"
 manual = ""
 
 [ui.glyph_colors]
 repo = "#f14e32"
 subdir = "#7aa2f7"
+path = "#7dcfff"
 worktree = "#9ece6a"
 manual = "#a599e9"
 
@@ -349,12 +351,14 @@ Config fields:
 | `ui.popup_height` | global | Height passed to `tmux display-popup -h`. Defaults to `90%`. |
 | `ui.glyphs.repo` | global | Glyph used for repo chips. Defaults to ``. |
 | `ui.glyphs.subdir` | global | Glyph used for subdir chips. Defaults to ``. |
+| `ui.glyphs.path` | global | Glyph used for ad-hoc path session chips. Defaults to `󰉋`. |
 | `ui.glyphs.worktree` | global | Glyph used for worktree chips. Defaults to `󰙅`. |
-| `ui.glyphs.manual` | global | Glyph used for manual session chips. Defaults to ``. |
+| `ui.glyphs.manual` | global | Glyph used for untagged tmux session chips. Defaults to ``. |
 | `ui.glyph_colors.repo` | global | Glyph foreground color used for repo chips. Defaults to `#f14e32`. |
 | `ui.glyph_colors.subdir` | global | Glyph foreground color used for subdir chips. Defaults to `#7aa2f7`. |
+| `ui.glyph_colors.path` | global | Glyph foreground color used for ad-hoc path session chips. Defaults to `#7dcfff`. |
 | `ui.glyph_colors.worktree` | global | Glyph foreground color used for worktree chips. Defaults to `#9ece6a`. |
-| `ui.glyph_colors.manual` | global | Glyph foreground color used for manual session chips. Defaults to `#a599e9`. |
+| `ui.glyph_colors.manual` | global | Glyph foreground color used for untagged tmux session chips. Defaults to `#a599e9`. |
 | `ui.columns.chip.show` | global | Shows the origin chip column when `true`. Defaults to `true`. |
 | `ui.columns.chip.width` | global | Origin chip column width in terminal cells. `0` uses the built-in chip width. Defaults to `12`. |
 | `ui.columns.chip.max_width` | global | Maximum origin chip width when `width = 0`. Defaults to `12`. |
@@ -504,7 +508,7 @@ options on the session:
 | tmux option | Meaning |
 | --- | --- |
 | `@tmux-parator.created` | Set to `1` when the session was tagged by `tmux-parator`. |
-| `@tmux-parator.kind` | Workspace kind shown in the chip: `repo`, `subdir`, `worktree`, or `manual`. |
+| `@tmux-parator.kind` | Workspace kind shown in the chip: `repo`, `subdir`, `path`, or `worktree`. Untagged tmux sessions are shown as `manual` without stored parator metadata. |
 | `@tmux-parator.path` | Absolute workspace path used to create or identify the session. |
 | `@tmux-parator.root` | Configured root label for root candidates, for example `repos`; empty for ad-hoc path search sessions. |
 | `@tmux-parator.base_name` | Unsuffixed sanitized leaf name used as the base for duplicate numbering. |

@@ -6,12 +6,14 @@ popup_height = "90%"
 [ui.glyphs]
 repo = ""
 subdir = ""
+path = "󰉋"
 worktree = "󰙅"
 manual = ""
 
 [ui.glyph_colors]
 repo = "#f14e32"
 subdir = "#7aa2f7"
+path = "#7dcfff"
 worktree = "#9ece6a"
 manual = "#a599e9"
 

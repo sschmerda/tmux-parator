@@ -185,8 +185,8 @@ func TestCandidateSessionMetadata(t *testing.T) {
 		kind:   candidatePath,
 		fsPath: pathsearch.Candidate{Name: "notes", Path: "/tmp/notes"},
 	}
-	if got := path.sessionMetadata(); got.Kind != "manual" || got.Path != "/tmp/notes" || got.Root != "" || got.BaseName != "notes" {
-		t.Fatalf("path metadata = %#v, want manual path/base", got)
+	if got := path.sessionMetadata(); got.Kind != "path" || got.Path != "/tmp/notes" || got.Root != "" || got.BaseName != "notes" {
+		t.Fatalf("path metadata = %#v, want path path/base", got)
 	}
 }
 
@@ -273,7 +273,7 @@ func TestCandidateRootLabel(t *testing.T) {
 }
 
 func TestCandidateGlyphPrefersRootAndSessionOverrides(t *testing.T) {
-	glyphs := config.Glyphs{Repo: "G", Subdir: "S", Worktree: "W", Manual: "M"}
+	glyphs := config.Glyphs{Repo: "G", Subdir: "S", Path: "P", Worktree: "W", Manual: "M"}
 
 	root := candidate{kind: candidateRoot, root: discovery.Candidate{Mode: "repo", Glyph: "R"}}
 	if got := candidateGlyph(root, glyphs); got != "R" {
@@ -286,8 +286,8 @@ func TestCandidateGlyphPrefersRootAndSessionOverrides(t *testing.T) {
 	}
 
 	path := candidate{kind: candidatePath}
-	if got := candidateGlyph(path, glyphs); got != "M" {
-		t.Fatalf("path glyph = %q, want M", got)
+	if got := candidateGlyph(path, glyphs); got != "P" {
+		t.Fatalf("path glyph = %q, want P", got)
 	}
 }
 
@@ -318,6 +318,7 @@ func TestUnmatchedSessionOriginUsesManualChipMetadata(t *testing.T) {
 	tests := map[string]string{
 		"repo":     "\ue702",
 		"subdir":   "\uf0c9",
+		"path":     "\U000f024b",
 		"worktree": "\U000f0655",
 		"manual":   "\uebc8",
 		"":         "\uebc8",
@@ -333,12 +334,14 @@ func TestOriginGlyphUsesConfiguredGlyphs(t *testing.T) {
 	glyphs := config.Glyphs{
 		Repo:     "R",
 		Subdir:   "S",
+		Path:     "P",
 		Worktree: "W",
 		Manual:   "M",
 	}
 	tests := map[string]string{
 		"repo":     "R",
 		"subdir":   "S",
+		"path":     "P",
 		"worktree": "W",
 		"manual":   "M",
 		"":         "M",
@@ -1284,8 +1287,8 @@ func TestOpenCandidateCreatesDuplicateWithNumberedLeafName(t *testing.T) {
 	if client.newSessionName != "data_2" || client.newSessionPath != "/tmp/project/data" {
 		t.Fatalf("new session = (%q, %q), want (data_2, /tmp/project/data)", client.newSessionName, client.newSessionPath)
 	}
-	if client.newSessionMetadata.BaseName != "data" || client.newSessionMetadata.Kind != "manual" || client.newSessionMetadata.Path != "/tmp/project/data" {
-		t.Fatalf("metadata = %#v, want manual path/base", client.newSessionMetadata)
+	if client.newSessionMetadata.BaseName != "data" || client.newSessionMetadata.Kind != "path" || client.newSessionMetadata.Path != "/tmp/project/data" {
+		t.Fatalf("metadata = %#v, want path path/base", client.newSessionMetadata)
 	}
 }
 
