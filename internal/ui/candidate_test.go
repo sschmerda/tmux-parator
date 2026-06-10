@@ -190,18 +190,18 @@ func TestCandidateSessionMetadata(t *testing.T) {
 	}
 }
 
-func TestSessionDetailRequiresParatorPathMetadata(t *testing.T) {
+func TestSessionDetailUsesInferredCurrentPathForUntaggedSession(t *testing.T) {
 	item := candidate{
 		kind:    candidateSession,
-		session: tmux.Session{Name: "main", Windows: "3", Attached: true},
+		session: tmux.Session{Name: "main", Windows: "3", Attached: true, CurrentPath: "/tmp/main"},
 	}
-	if got := item.detail(); got != "" {
-		t.Fatalf("detail() = %q, want empty for session without path metadata", got)
+	if got := item.detail(); got != "/tmp/main" {
+		t.Fatalf("detail() = %q, want inferred current path", got)
 	}
 
 	item.session.Metadata.Path = "/tmp/main"
 	if got := item.detail(); got != "/tmp/main" {
-		t.Fatalf("detail() = %q, want path metadata", got)
+		t.Fatalf("detail() = %q, want metadata path", got)
 	}
 }
 
@@ -217,6 +217,22 @@ func TestSessionDetailUsesCompactRootPath(t *testing.T) {
 	}
 	if got := model.candidates[0].detail(); got != "repos/concepts" {
 		t.Fatalf("detail() = %q, want compact root path", got)
+	}
+}
+
+func TestSessionDetailPrefersMetadataPathOverCurrentPath(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.sessions = []tmux.Session{{
+		Name:        "concepts",
+		CurrentPath: "/tmp/other/location",
+		Metadata:    tmux.SessionMetadata{Path: "/tmp/repos/concepts", Root: "repos"},
+	}}
+	model.rootItems = []discovery.Candidate{{RootName: "repos", Name: "concepts", Path: "/tmp/repos/concepts", RelativePath: "concepts", DisplayPath: "repos/concepts"}}
+
+	model.rebuildCandidates()
+
+	if got := model.candidates[0].detail(); got != "repos/concepts" {
+		t.Fatalf("detail() = %q, want metadata-derived compact path", got)
 	}
 }
 

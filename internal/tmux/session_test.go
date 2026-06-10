@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -15,21 +16,22 @@ func TestParseSessions(t *testing.T) {
 	}{
 		{
 			name: "one formatted session per line",
-			out:  "main\x1f2\x1f1\x1fMon Jun  1 10:00:00 2026\x1f\x1f\x1f\x1f\x1f\x1f\x1f\nwork\x1f1\x1f0\x1fTue Jun  2 11:00:00 2026\x1f\x1f\x1f\x1f\x1f\x1f\x1f\n",
+			out:  "main\x1f2\x1f1\x1fMon Jun  1 10:00:00 2026\x1f\x1f\x1f\x1f\x1f\x1f\x1f\x1f/Users/me\nwork\x1f1\x1f0\x1fTue Jun  2 11:00:00 2026\x1f\x1f\x1f\x1f\x1f\x1f\x1f\x1f/Users/me/work\n",
 			want: []Session{
-				{Name: "main", Windows: "2", Attached: true, CreatedTime: "Mon Jun  1 10:00:00 2026"},
-				{Name: "work", Windows: "1", Attached: false, CreatedTime: "Tue Jun  2 11:00:00 2026"},
+				{Name: "main", Windows: "2", Attached: true, CreatedTime: "Mon Jun  1 10:00:00 2026", CurrentPath: "/Users/me"},
+				{Name: "work", Windows: "1", Attached: false, CreatedTime: "Tue Jun  2 11:00:00 2026", CurrentPath: "/Users/me/work"},
 			},
 		},
 		{
 			name: "tagged parator session metadata",
-			out:  "parator-dev\x1f1\x1f0\x1fTue Jun  2 11:00:00 2026\x1f1\x1frepo\x1f/Users/me/repos/tmux-parator\x1frepos\x1ftmux-parator\x1fR\x1f#d6a84f\n",
+			out:  "parator-dev\x1f1\x1f0\x1fTue Jun  2 11:00:00 2026\x1f1\x1frepo\x1f/Users/me/repos/tmux-parator\x1frepos\x1ftmux-parator\x1fR\x1f#d6a84f\x1f/Users/me/repos/tmux-parator\n",
 			want: []Session{
 				{
 					Name:        "parator-dev",
 					Windows:     "1",
 					Attached:    false,
 					CreatedTime: "Tue Jun  2 11:00:00 2026",
+					CurrentPath: "/Users/me/repos/tmux-parator",
 					Metadata: SessionMetadata{
 						CreatedByParator: true,
 						Kind:             "repo",
@@ -137,6 +139,22 @@ func TestSwitchLastSessionUsesTmuxLastSession(t *testing.T) {
 	want := [][]string{{"tmux", "switch-client", "-l"}}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("runner calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
+func TestListSessionsRequestsPaneCurrentPath(t *testing.T) {
+	runner := &recordingRunner{}
+	client := NewClient(runner)
+
+	if _, err := client.ListSessions(context.Background()); err != nil {
+		t.Fatalf("ListSessions() unexpected error: %v", err)
+	}
+
+	if len(runner.calls) != 1 {
+		t.Fatalf("runner calls = %#v, want one call", runner.calls)
+	}
+	if got := runner.calls[0][3]; !strings.Contains(got, "#{pane_current_path}") {
+		t.Fatalf("list format = %q, want pane_current_path", got)
 	}
 }
 

@@ -24,6 +24,7 @@ type Session struct {
 	Windows     string
 	Attached    bool
 	CreatedTime string
+	CurrentPath string
 	Metadata    SessionMetadata
 }
 
@@ -58,6 +59,7 @@ func (c Client) ListSessions(ctx context.Context) ([]Session, error) {
 		"#{@tmux-parator.base_name}",
 		"#{@tmux-parator.glyph}",
 		"#{@tmux-parator.glyph_color}",
+		"#{pane_current_path}",
 	}, sessionFieldSeparator)
 	out, err := c.runner.Run(ctx, "tmux", "list-sessions", "-F", format)
 	if err != nil {
@@ -201,6 +203,9 @@ func ParseSessions(out []byte) []Session {
 		}
 		if len(parts) > 10 {
 			session.Metadata.GlyphColor = strings.TrimSpace(parts[10])
+		}
+		if len(parts) > 11 {
+			session.CurrentPath = strings.TrimSpace(parts[11])
 		}
 		sessions = append(sessions, session)
 	}

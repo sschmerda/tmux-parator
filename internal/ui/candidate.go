@@ -47,7 +47,7 @@ func candidatesFromSessions(sessions []tmux.Session, origins map[string]string, 
 	items := make([]candidate, 0, len(sessions))
 	for _, session := range sessions {
 		item := candidate{kind: candidateSession, session: session, origin: origins[session.Name]}
-		item.pathDetail = compactSessionPath(session.Metadata.Path, roots)
+		item.pathDetail = compactSessionPath(sessionDisplayPath(session), roots)
 		items = append(items, item)
 	}
 	return items
@@ -112,8 +112,18 @@ func (c candidate) detail() string {
 		if strings.TrimSpace(c.session.Metadata.Path) != "" {
 			return displaySessionPath(c.session.Metadata.Path)
 		}
+		if strings.TrimSpace(c.session.CurrentPath) != "" {
+			return displaySessionPath(c.session.CurrentPath)
+		}
 		return ""
 	}
+}
+
+func sessionDisplayPath(session tmux.Session) string {
+	if path := strings.TrimSpace(session.Metadata.Path); path != "" {
+		return path
+	}
+	return strings.TrimSpace(session.CurrentPath)
 }
 
 func compactSessionPath(path string, roots []discovery.Candidate) string {
