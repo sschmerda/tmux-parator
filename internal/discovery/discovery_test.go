@@ -17,7 +17,7 @@ func TestDiscoverSubdirs(t *testing.T) {
 	mkdir(t, filepath.Join(root, "one", "nested"))
 	mkdir(t, filepath.Join(root, ".hidden"))
 
-	got, err := Discover(context.Background(), []config.Root{{Name: "work", Path: root, Mode: "subdir"}}, Options{SkipHidden: true})
+	got, err := Discover(context.Background(), []config.Root{{Name: "work", Path: root, Kind: "subdir"}}, Options{SkipHidden: true})
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
 	}
@@ -36,7 +36,7 @@ func TestDiscoverSubdirsDepth(t *testing.T) {
 	root := t.TempDir()
 	mkdir(t, filepath.Join(root, "one", "nested", "deeper"))
 
-	got, err := Discover(context.Background(), []config.Root{{Name: "work", Path: root, Mode: "subdir", Depth: 2}}, Options{SkipHidden: true})
+	got, err := Discover(context.Background(), []config.Root{{Name: "work", Path: root, Kind: "subdir", Depth: 2}}, Options{SkipHidden: true})
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
 	}
@@ -53,7 +53,7 @@ func TestDiscoverRepos(t *testing.T) {
 	mkdir(t, filepath.Join(root, "repo", ".git"))
 	mkdir(t, filepath.Join(root, "plain"))
 
-	got, err := Discover(context.Background(), []config.Root{{Name: "work", Path: root, Mode: "repo"}}, Options{SkipHidden: true})
+	got, err := Discover(context.Background(), []config.Root{{Name: "work", Path: root, Kind: "repo"}}, Options{SkipHidden: true})
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
 	}
@@ -70,7 +70,7 @@ func TestDisplayPathUsesRootPathBasenameNotConfiguredName(t *testing.T) {
 	root := filepath.Join(parent, "documents")
 	mkdir(t, filepath.Join(root, "notes"))
 
-	got, err := Discover(context.Background(), []config.Root{{Name: "docs", Path: root, Mode: "subdir"}}, Options{SkipHidden: true})
+	got, err := Discover(context.Background(), []config.Root{{Name: "docs", Path: root, Kind: "subdir"}}, Options{SkipHidden: true})
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
 	}
@@ -90,7 +90,7 @@ func TestDiscoverReposMaxDepth(t *testing.T) {
 	mkdir(t, filepath.Join(root, "one", "nested", "repo", ".git"))
 	mkdir(t, filepath.Join(root, "top", ".git"))
 
-	got, err := Discover(context.Background(), []config.Root{{Name: "work", Path: root, Mode: "repo", MaxDepth: 2}}, Options{SkipHidden: true})
+	got, err := Discover(context.Background(), []config.Root{{Name: "work", Path: root, Kind: "repo", MaxDepth: 2}}, Options{SkipHidden: true})
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
 	}
@@ -103,7 +103,7 @@ func TestDiscoverCanIncludeHiddenDirectories(t *testing.T) {
 	root := t.TempDir()
 	mkdir(t, filepath.Join(root, ".hidden"))
 
-	got, err := Discover(context.Background(), []config.Root{{Name: "work", Path: root, Mode: "subdir"}}, Options{SkipHidden: false})
+	got, err := Discover(context.Background(), []config.Root{{Name: "work", Path: root, Kind: "subdir"}}, Options{SkipHidden: false})
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
 	}
@@ -118,7 +118,7 @@ func TestDiscoverUsesRootSkipHiddenOverride(t *testing.T) {
 
 	got, err := Discover(
 		context.Background(),
-		[]config.Root{{Name: "work", Path: root, Mode: "subdir", SkipHidden: false, SkipDirs: []string{}}},
+		[]config.Root{{Name: "work", Path: root, Kind: "subdir", SkipHidden: false, SkipDirs: []string{}}},
 		Options{SkipHidden: true},
 	)
 	if err != nil {
@@ -136,7 +136,7 @@ func TestDiscoverUsesRootSkipDirsOverride(t *testing.T) {
 
 	got, err := Discover(
 		context.Background(),
-		[]config.Root{{Name: "work", Path: root, Mode: "subdir", SkipHidden: true, SkipDirs: []string{"tmp"}}},
+		[]config.Root{{Name: "work", Path: root, Kind: "subdir", SkipHidden: true, SkipDirs: []string{"tmp"}}},
 		Options{SkipHidden: true, SkipDirs: []string{"node_modules"}},
 	)
 	if err != nil {
@@ -152,7 +152,7 @@ func TestDiscoverSkipsConfiguredDirectories(t *testing.T) {
 	mkdir(t, filepath.Join(root, "keep"))
 	mkdir(t, filepath.Join(root, "node_modules"))
 
-	got, err := Discover(context.Background(), []config.Root{{Name: "work", Path: root, Mode: "subdir"}}, Options{SkipHidden: true, SkipDirs: []string{"node_modules"}})
+	got, err := Discover(context.Background(), []config.Root{{Name: "work", Path: root, Kind: "subdir"}}, Options{SkipHidden: true, SkipDirs: []string{"node_modules"}})
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
 	}
@@ -167,7 +167,7 @@ func TestDiscoverSkipsGitignoredDirectories(t *testing.T) {
 	mkdir(t, filepath.Join(root, "ignored"))
 	writeFile(t, filepath.Join(root, ".gitignore"), "ignored/\n")
 
-	got, err := Discover(context.Background(), []config.Root{{Name: "work", Path: root, Mode: "subdir"}}, Options{SkipGitignored: true})
+	got, err := Discover(context.Background(), []config.Root{{Name: "work", Path: root, Kind: "subdir"}}, Options{SkipGitignored: true})
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
 	}
@@ -183,7 +183,7 @@ func TestDiscoverUsesRootSkipGitignoredOverride(t *testing.T) {
 
 	got, err := Discover(
 		context.Background(),
-		[]config.Root{{Name: "work", Path: root, Mode: "subdir", SkipGitignored: false, SkipDirs: []string{}}},
+		[]config.Root{{Name: "work", Path: root, Kind: "subdir", SkipGitignored: false, SkipDirs: []string{}}},
 		Options{SkipGitignored: true},
 	)
 	if err != nil {
@@ -198,7 +198,7 @@ func TestDiscoverReposStillDetectsGitWhenDotGitWouldBeSkipped(t *testing.T) {
 	root := t.TempDir()
 	mkdir(t, filepath.Join(root, "repo", ".git"))
 
-	got, err := Discover(context.Background(), []config.Root{{Name: "work", Path: root, Mode: "repo"}}, Options{SkipHidden: true, SkipDirs: []string{".git"}})
+	got, err := Discover(context.Background(), []config.Root{{Name: "work", Path: root, Kind: "repo"}}, Options{SkipHidden: true, SkipDirs: []string{".git"}})
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
 	}

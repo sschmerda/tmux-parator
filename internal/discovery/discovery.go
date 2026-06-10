@@ -21,6 +21,7 @@ type Candidate struct {
 	RelativePath string
 	DisplayPath  string
 	Name         string
+	Kind         string
 	Mode         string
 	Glyph        string
 	GlyphColor   string
@@ -62,7 +63,7 @@ func discoverRoot(ctx context.Context, root config.Root, options Options) ([]Can
 	if strings.TrimSpace(rootPath) == "" {
 		return nil, nil
 	}
-	mode := strings.TrimSpace(root.Mode)
+	mode := strings.TrimSpace(root.Kind)
 	if mode == "" {
 		mode = "subdir"
 	}
@@ -335,6 +336,7 @@ func newCandidate(rootName string, rootPath string, path string, name string, mo
 		RelativePath: relativePath,
 		DisplayPath:  displayPath,
 		Name:         name,
+		Kind:         mode,
 		Mode:         mode,
 		Glyph:        glyph,
 		GlyphColor:   glyphColor,

@@ -61,7 +61,7 @@ type Column struct {
 type Root struct {
 	Name           string   `toml:"name"`
 	Path           string   `toml:"path"`
-	Mode           string   `toml:"mode"`
+	Kind           string   `toml:"kind"`
 	Glyph          string   `toml:"glyph"`
 	GlyphColor     string   `toml:"glyph_color"`
 	Depth          int      `toml:"depth"`
@@ -92,7 +92,7 @@ type PathSearch struct {
 type rawRoot struct {
 	Name           string   `toml:"name"`
 	Path           string   `toml:"path"`
-	Mode           string   `toml:"mode"`
+	Kind           string   `toml:"kind"`
 	Glyph          string   `toml:"glyph"`
 	GlyphColor     string   `toml:"glyph_color"`
 	Depth          int      `toml:"depth"`
@@ -193,6 +193,9 @@ func LoadFile(path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	if err := validateDeprecatedKeys(meta); err != nil {
+		return Config{}, err
+	}
 	cfg := Default()
 	applyRawConfig(&cfg, raw, meta)
 	return finalize(cfg)
@@ -202,6 +205,9 @@ func parseConfig(content string, fallback Config) (Config, error) {
 	var raw rawConfig
 	meta, err := toml.Decode(content, &raw)
 	if err != nil {
+		return Config{}, err
+	}
+	if err := validateDeprecatedKeys(meta); err != nil {
 		return Config{}, err
 	}
 	cfg := fallback
@@ -379,7 +385,7 @@ func normalizeRootGlyphs(roots []Root, glyphs Glyphs) []Root {
 		if strings.TrimSpace(roots[i].Glyph) != "" {
 			continue
 		}
-		roots[i].Glyph = glyphForMode(roots[i].Mode, glyphs)
+		roots[i].Glyph = glyphForMode(rootKind(roots[i]), glyphs)
 	}
 	return roots
 }
@@ -488,6 +494,7 @@ func normalizePathSearch(raw rawPathSearch, fallback PathSearch, discovery Disco
 func normalizeRoots(rawRoots []rawRoot, discovery Discovery) []Root {
 	roots := make([]Root, 0, len(rawRoots))
 	for _, raw := range rawRoots {
+		kind := normalizeRootMode(raw.Kind)
 		skipHidden := discovery.SkipHidden
 		if raw.SkipHidden != nil {
 			skipHidden = *raw.SkipHidden
@@ -503,7 +510,7 @@ func normalizeRoots(rawRoots []rawRoot, discovery Discovery) []Root {
 		roots = append(roots, Root{
 			Name:           raw.Name,
 			Path:           raw.Path,
-			Mode:           raw.Mode,
+			Kind:           kind,
 			Glyph:          raw.Glyph,
 			GlyphColor:     raw.GlyphColor,
 			Depth:          raw.Depth,
@@ -530,12 +537,12 @@ func validateRoots(roots []Root) error {
 		if strings.TrimSpace(root.Path) == "" {
 			return fmt.Errorf("roots[%d].path is required", i)
 		}
-		mode := strings.TrimSpace(root.Mode)
+		mode := rootKind(root)
 		if mode == "" {
 			mode = "subdir"
 		}
 		if mode != "subdir" && mode != "repo" {
-			return fmt.Errorf("roots[%d].mode must be subdir or repo", i)
+			return fmt.Errorf("roots[%d].kind must be subdir or repo", i)
 		}
 		if mode == "subdir" && root.Depth < 0 {
 			return fmt.Errorf("roots[%d].depth must be 0 or greater", i)
@@ -545,6 +552,23 @@ func validateRoots(roots []Root) error {
 		}
 	}
 	return nil
+}
+
+func rootKind(root Root) string {
+	return normalizeRootMode(root.Kind)
+}
+
+func normalizeRootMode(mode string) string {
+	switch strings.TrimSpace(strings.ToLower(mode)) {
+	case "":
+		return ""
+	case "subdir":
+		return "subdir"
+	case "repo":
+		return "repo"
+	default:
+		return strings.TrimSpace(strings.ToLower(mode))
+	}
 }
 
 func validatePathSearch(pathSearch PathSearch) error {
@@ -558,6 +582,15 @@ func validatePathSearch(pathSearch PathSearch) error {
 	}
 	if pathSearch.Limit < 0 {
 		return fmt.Errorf("path_search.limit must be 0 or greater")
+	}
+	return nil
+}
+
+func validateDeprecatedKeys(meta toml.MetaData) error {
+	for _, key := range meta.Undecoded() {
+		if len(key) == 2 && key[0] == "roots" && key[1] == "mode" {
+			return fmt.Errorf("roots.kind replaced roots.mode")
+		}
 	}
 	return nil
 }

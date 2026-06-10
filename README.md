@@ -318,7 +318,7 @@ limit = 5000
 [[roots]]
 name = "projects"
 path = "~/projects"
-mode = "repo"
+kind = "repo"
 glyph = ""
 glyph_color = "#f14e32"
 depth = 1
@@ -330,7 +330,7 @@ skip_dirs = ["node_modules", "vendor", "dist", "build"]
 [[roots]]
 name = "scratch"
 path = "~/scratch"
-mode = "subdir"
+kind = "subdir"
 glyph = ""
 glyph_color = "#7aa2f7"
 depth = 2
@@ -382,7 +382,7 @@ Config fields:
 | `path_search.limit` | global | Maximum path-search results retained before fuzzy filtering. Defaults to `5000`. |
 | `roots.name` | root | Required unique namespace shown in compact root paths. |
 | `roots.path` | root | Required filesystem path to discover under. `~` is expanded. |
-| `roots.mode` | root | Discovery mode: `subdir` or `repo`. Defaults to `subdir`. |
+| `roots.kind` | root | Discovery kind: `subdir` or `repo`. Defaults to `subdir`. |
 | `roots.glyph` | root | Optional per-root chip glyph override. Defaults to the global glyph for the root mode. |
 | `roots.glyph_color` | root | Optional per-root glyph foreground color override, for example `#d6a84f`. Defaults to the built-in color for the root mode. |
 | `roots.depth` | root | `subdir` traversal depth. `0` means default `1`. |

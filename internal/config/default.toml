@@ -55,7 +55,7 @@ limit = 5000
 [[roots]]
 name = "projects"
 path = "~/projects"
-mode = "repo"
+kind = "repo"
 glyph = ""
 glyph_color = "#f14e32"
 depth = 1
@@ -67,7 +67,7 @@ skip_dirs = ["node_modules", "vendor", "dist", "build"]
 [[roots]]
 name = "scratch"
 path = "~/scratch"
-mode = "subdir"
+kind = "subdir"
 glyph = ""
 glyph_color = "#7aa2f7"
 depth = 2

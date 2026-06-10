@@ -73,7 +73,7 @@ popup_height = "70%"
 [[roots]]
 name = "repos"
 path = "~/code"
-mode = "repo"
+kind = "repo"
 glyph = "R"
 glyph_color = "#d6a84f"
 `)
@@ -84,7 +84,7 @@ glyph_color = "#d6a84f"
 	if cfg.UI.Theme != "catppuccin" || cfg.UI.PopupWidth != "80%" || cfg.UI.PopupHeight != "70%" {
 		t.Fatalf("ui config not applied: %#v", cfg.UI)
 	}
-	if len(cfg.Roots) != 1 || cfg.Roots[0].Name != "repos" || cfg.Roots[0].Mode != "repo" {
+	if len(cfg.Roots) != 1 || cfg.Roots[0].Name != "repos" || cfg.Roots[0].Kind != "repo" {
 		t.Fatalf("roots not loaded: %#v", cfg.Roots)
 	}
 	if cfg.Roots[0].Glyph != "R" {
@@ -181,7 +181,7 @@ repo = "#123456"
 [[roots]]
 name = "repos"
 path = "~/code"
-mode = "repo"
+kind = "repo"
 `)
 	cfg, err := LoadFile(path)
 	if err != nil {
@@ -216,7 +216,7 @@ skip_dirs = ["node_modules", "tmp"]
 [[roots]]
 name = "repos"
 path = "~/code"
-mode = "repo"
+kind = "repo"
 `)
 	cfg, err := LoadFile(path)
 	if err != nil {
@@ -282,7 +282,7 @@ skip_dirs = ["tmp"]
 [[roots]]
 name = "repos"
 path = "~/code"
-mode = "repo"
+kind = "repo"
 `)
 	cfg, err := LoadFile(path)
 	if err != nil {
@@ -307,7 +307,7 @@ func TestLoadFileReadsRootDiscoveryOverrides(t *testing.T) {
 [[roots]]
 name = "repos"
 path = "~/code"
-	mode = "repo"
+	kind = "repo"
 	skip_hidden = false
 	skip_gitignored = false
 	skip_dirs = ["tmp"]
@@ -355,31 +355,21 @@ path = "~/code"
 		"missing path": `[[roots]]
 name = "repos"
 `,
-		"invalid mode": `[[roots]]
+		"deprecated mode field": `[[roots]]
 name = "repos"
 path = "~/code"
-mode = "invalid"
-`,
-		"legacy repos mode": `[[roots]]
-name = "repos"
-path = "~/code"
-mode = "repos"
-`,
-		"legacy subdirs mode": `[[roots]]
-name = "work"
-path = "~/work"
-mode = "subdirs"
+mode = "repo"
 `,
 		"invalid depth": `[[roots]]
 name = "work"
 path = "~/work"
-mode = "subdir"
+kind = "subdir"
 depth = -1
 `,
 		"invalid max depth": `[[roots]]
 name = "repos"
 path = "~/code"
-mode = "repo"
+kind = "repo"
 max_depth = -1
 `,
 	}

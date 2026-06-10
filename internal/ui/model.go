@@ -2099,7 +2099,10 @@ func hasVisibleBrowseColumns(columns config.Columns) bool {
 
 func renderBrowseColumnHeader(s styles, width int, columns config.Columns) string {
 	columns = normalizeUIColumns(columns)
-	headerStyle := s.chip
+	headerStyle := lipgloss.NewStyle().
+		Foreground(s.popupAccent.GetForeground()).
+		Background(s.popupBody.GetBackground()).
+		Bold(true)
 	parts := make([]string, 0, 3)
 	if columns.Chip.Show {
 		parts = append(parts, renderHeaderColumn("kind", headerStyle, columns.Chip.Width, lipgloss.Left))
@@ -2137,7 +2140,7 @@ func renderHeaderColumn(label string, style lipgloss.Style, width int, align lip
 	if width <= 0 {
 		return style.Render(" " + label + " ")
 	}
-	return style.Width(width).Align(align).Render(label)
+	return style.Width(width).Align(align).Render(" " + label)
 }
 
 func (m Model) renderCandidateRow(item candidate, selected bool, width int, columns config.Columns) string {
@@ -2460,9 +2463,9 @@ func renderOriginChip(origin string, glyph string, labelStyle lipgloss.Style, gl
 func renderRootColumn(root string, style lipgloss.Style, highlightStyle lipgloss.Style, indexes []int, width int) string {
 	root = truncateDots(root, width)
 	if len(indexes) == 0 {
-		return style.Width(width).Align(lipgloss.Center).Render(root)
+		return style.Width(width).Align(lipgloss.Left).Render(root)
 	}
-	return style.Width(width).Align(lipgloss.Center).Render(renderMatchedText(root, style, highlightStyle, indexes))
+	return style.Width(width).Align(lipgloss.Left).Render(renderMatchedText(root, style, highlightStyle, indexes))
 }
 
 func renderNameColumn(name string, style lipgloss.Style, highlightStyle lipgloss.Style, indexes []int, width int) string {
@@ -2490,7 +2493,7 @@ func candidateOrigin(item candidate) string {
 		return item.origin
 	}
 	if item.kind == candidateRoot {
-		return originLabel(item.root.Mode)
+		return originLabel(rootMode(item.root))
 	}
 	return "manual"
 }

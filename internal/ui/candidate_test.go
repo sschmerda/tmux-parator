@@ -559,7 +559,7 @@ func TestMainTogglesDiscoverySkipRules(t *testing.T) {
 	model := NewModel(
 		nil,
 		theme.Default(),
-		[]config.Root{{Name: "work", Path: "/tmp", Mode: "subdir", SkipHidden: true, SkipGitignored: true}},
+		[]config.Root{{Name: "work", Path: "/tmp", Kind: "subdir", SkipHidden: true, SkipGitignored: true}},
 		discovery.Options{SkipHidden: true, SkipGitignored: true},
 		config.PathSearch{},
 		config.Glyphs{},

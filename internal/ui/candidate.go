@@ -10,6 +10,13 @@ import (
 	"github.com/sschmerda/tmux-parator/internal/tmux"
 )
 
+func rootMode(root discovery.Candidate) string {
+	if kind := strings.TrimSpace(root.Kind); kind != "" {
+		return kind
+	}
+	return strings.TrimSpace(root.Mode)
+}
+
 type candidateKind int
 
 const (
@@ -168,7 +175,7 @@ func (c candidate) fuzzyCandidate() fuzzy.Candidate {
 		return fuzzy.Candidate{
 			Title:    c.root.Name,
 			Category: "Roots",
-			Aliases:  []string{originLabel(c.root.Mode)},
+			Aliases:  []string{originLabel(rootMode(c.root))},
 			Fields: []fuzzy.Field{
 				{Name: fieldRoot, Value: c.root.RootName, Weight: 900},
 				{Name: fieldCompactPath, Value: pathDetail, Weight: 300},
@@ -244,7 +251,7 @@ func (c candidate) sessionMetadata() tmux.SessionMetadata {
 	case candidateRoot:
 		return tmux.SessionMetadata{
 			CreatedByParator: true,
-			Kind:             originLabel(c.root.Mode),
+			Kind:             originLabel(rootMode(c.root)),
 			Path:             c.root.Path,
 			Root:             c.root.RootName,
 			BaseName:         c.sessionName(),
