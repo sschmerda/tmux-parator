@@ -26,6 +26,15 @@ func renderedColumn(line string, needle string) int {
 	return lipgloss.Width(line[:index])
 }
 
+func headerLine(view string) string {
+	for _, line := range strings.Split(ansi.Strip(view), "\n") {
+		if strings.Contains(line, "kind") && strings.Contains(line, "root") && strings.Contains(line, "name") {
+			return line
+		}
+	}
+	return ""
+}
+
 func TestSanitizeSessionName(t *testing.T) {
 	tests := map[string]string{
 		"tmux-parator":          "tmux-parator",
@@ -1012,6 +1021,44 @@ func TestPathSearchUsesSameVisibleRowBudgetAsBrowse(t *testing.T) {
 
 	if got, want := model.pathListLimit(), model.listLimit(); got != want {
 		t.Fatalf("pathListLimit = %d, want %d", got, want)
+	}
+}
+
+func TestPathSearchUsesBrowseColumnHeader(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.width = 96
+	model.height = 18
+	model.loading = false
+	model.sessions = []tmux.Session{{Name: "main", Metadata: tmux.SessionMetadata{Path: "/tmp/main"}}}
+	model.pathResult = []candidate{{kind: candidatePath, fsPath: pathsearch.Candidate{Name: "main", Path: "/tmp/main"}}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	browseHeader := headerLine(model.View())
+	model.mode = modePathSearch
+	pathHeader := headerLine(model.View())
+
+	if browseHeader == "" || pathHeader == "" {
+		t.Fatalf("missing header lines:\nbrowse: %q\npath: %q", browseHeader, pathHeader)
+	}
+	if pathHeader != browseHeader {
+		t.Fatalf("path header = %q, want browse header %q", pathHeader, browseHeader)
+	}
+}
+
+func TestPathSearchUsesPathsSectionDivider(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.mode = modePathSearch
+	model.width = 96
+	model.height = 18
+	model.pathResult = []candidate{{kind: candidatePath, fsPath: pathsearch.Candidate{Name: "main", Path: "/tmp/main"}}}
+
+	view := ansi.Strip(model.View())
+	if !strings.Contains(view, "paths") {
+		t.Fatalf("path search view missing paths divider:\n%s", view)
+	}
+	if strings.Contains(view, "open sessions") {
+		t.Fatalf("path search view should not use browse session divider:\n%s", view)
 	}
 }
 

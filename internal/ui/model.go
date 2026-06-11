@@ -731,6 +731,16 @@ func (m Model) pathSearchView() string {
 	contentWidth := m.contentWidth()
 	rowsUsed := 0
 	renderedCandidates := 0
+	if hasVisibleBrowseColumns(columns) && rowsUsed < limit {
+		b.WriteString(renderInsetRow(renderColumnOffsetRow(renderBrowseColumnHeader(s, contentWidth-searchBoxInnerOffset, columns), s), m.innerWidth(), s))
+		b.WriteString("\n")
+		rowsUsed++
+	}
+	if rowsUsed < limit {
+		b.WriteString(renderInsetDividerRow(renderBrowseSectionHeader("paths", true, s, contentWidth+1), m.innerWidth(), s))
+		b.WriteString("\n")
+		rowsUsed++
+	}
 	if m.showPathTopOverflow(limit) && rowsUsed < limit {
 		b.WriteString(renderInsetRow(s.muted.Render("..."), m.innerWidth(), s))
 		b.WriteString("\n")
@@ -1510,7 +1520,7 @@ func (m Model) innerHeight() int {
 }
 
 func (m Model) pathListLimit() int {
-	return m.availableListRows(len(m.pathResult))
+	return m.availableListRows(len(m.pathResult) + 2)
 }
 
 func (m *Model) ensureCursorVisible() {
