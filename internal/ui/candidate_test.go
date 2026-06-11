@@ -18,6 +18,14 @@ import (
 	"github.com/sschmerda/tmux-parator/internal/tmux"
 )
 
+func renderedColumn(line string, needle string) int {
+	index := strings.Index(line, needle)
+	if index < 0 {
+		return -1
+	}
+	return lipgloss.Width(line[:index])
+}
+
 func TestSanitizeSessionName(t *testing.T) {
 	tests := map[string]string{
 		"tmux-parator":          "tmux-parator",
@@ -800,7 +808,10 @@ func TestMainViewRendersBrowseColumnHeaders(t *testing.T) {
 	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
 	model.width = 120
 	model.height = 20
-	model.sessions = []tmux.Session{{Name: "main", Metadata: tmux.SessionMetadata{Path: "/tmp/main"}}}
+	model.sessions = []tmux.Session{
+		{Name: "main", Metadata: tmux.SessionMetadata{Path: "/tmp/main"}},
+		{Name: "other", Metadata: tmux.SessionMetadata{Path: "/tmp/other"}},
+	}
 	model.rootItems = []discovery.Candidate{{RootName: "repos", Name: "tmux-parator", Path: "/tmp/repos/tmux-parator", RelativePath: "tmux-parator", DisplayPath: "repos/tmux-parator", Mode: "repo"}}
 	model.rebuildCandidates()
 	model.applyFilter()
@@ -831,15 +842,119 @@ func TestMainViewRendersRoundedAppFrame(t *testing.T) {
 	}
 }
 
+func TestMainSearchBoxIsInsetFromAppFrame(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.width = 80
+	model.height = 16
+	model.sessions = []tmux.Session{{Name: "main"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	lines := strings.Split(ansi.Strip(model.View()), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("view has too few lines:\n%s", model.View())
+	}
+	if !strings.HasPrefix(lines[1], "│    ╭") {
+		t.Fatalf("search box not inset from frame: %q", lines[1])
+	}
+}
+
+func TestMainColumnsAndFooterAlignWithSearchInset(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.width = 96
+	model.height = 18
+	model.loading = false
+	model.sessions = []tmux.Session{{Name: "main", Metadata: tmux.SessionMetadata{Path: "/tmp/main"}}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	lines := strings.Split(ansi.Strip(model.View()), "\n")
+	var search string
+	var header string
+	var section string
+	var footer string
+	for _, line := range lines {
+		if strings.Contains(line, "❯") {
+			search = line
+		}
+		if strings.Contains(line, "kind") && strings.Contains(line, "root") && strings.Contains(line, "name") {
+			header = line
+		}
+		if strings.Contains(line, "open sessions") {
+			section = line
+		}
+		if strings.Contains(line, "PATH OFF") && strings.Contains(line, "HIDDEN SKIP") {
+			footer = line
+		}
+	}
+	if !strings.HasPrefix(header, "│    ") {
+		t.Fatalf("header not aligned with inset: %q", header)
+	}
+	if !strings.HasPrefix(footer, "│    ") {
+		t.Fatalf("footer not aligned with inset: %q", footer)
+	}
+	if !strings.HasPrefix(search, "│    ") {
+		t.Fatalf("search not aligned with column gutter: %q", search)
+	}
+	kindIndex := renderedColumn(header, "kind")
+	if kindIndex < 0 {
+		t.Fatalf("header missing kind column: %q", header)
+	}
+	if promptIndex := renderedColumn(search, "❯"); promptIndex != kindIndex {
+		t.Fatalf("search prompt index = %d, want kind index %d:\nsearch: %q\nheader: %q", promptIndex, kindIndex, search, header)
+	}
+	kindColumnStart := kindIndex - renderedColumn(renderHeaderColumn("kind", lipgloss.NewStyle(), normalizeUIColumns(config.Columns{}).Chip.Width, lipgloss.Left), "kind")
+	footerColumnStart := renderedColumn(footer, "PATH OFF") - ((statusChipWidth - lipgloss.Width("PATH OFF")) / 2)
+	if footerColumnStart != kindColumnStart {
+		t.Fatalf("footer column start = %d, want kind column start %d: %q", footerColumnStart, kindColumnStart, footer)
+	}
+	for name, line := range map[string]string{"search": search, "header": header, "footer": footer} {
+		if got := lipgloss.Width(line); got != model.width {
+			t.Fatalf("%s width = %d, want %d: %q", name, got, model.width, line)
+		}
+	}
+	if !strings.HasSuffix(search, "    │") {
+		t.Fatalf("search missing matching right inset: %q", search)
+	}
+	if !strings.HasSuffix(header, "      │") {
+		t.Fatalf("header missing row right inset: %q", header)
+	}
+	if !strings.HasSuffix(footer, "     │") {
+		t.Fatalf("footer missing row right inset: %q", footer)
+	}
+	if !strings.HasSuffix(section, "    │") {
+		t.Fatalf("section divider missing one-cell-longer right inset: %q", section)
+	}
+}
+
+func TestSelectedRowMarkerAlignsWithActiveSectionText(t *testing.T) {
+	styles := newStyles(theme.Default())
+	item := candidate{kind: candidateSession, session: tmux.Session{Name: "main", Metadata: tmux.SessionMetadata{Path: "/tmp/main"}}}
+	columns := normalizeUIColumns(config.Columns{})
+	contentWidth := 80
+	innerWidth := contentWidth + rowLeftInset() + rowRightInset()
+	section := ansi.Strip(renderInsetDividerRow(renderBrowseSectionHeader("open sessions", true, styles, contentWidth+1), innerWidth, styles))
+	row := ansi.Strip(renderInsetRow(renderCandidateRow(item, true, styles, contentWidth, config.Glyphs{}, config.GlyphColors{}, columns), innerWidth, styles))
+
+	markerIndex := renderedColumn(row, "▌")
+	sectionTextIndex := renderedColumn(section, "open sessions")
+	if markerIndex < 0 || sectionTextIndex < 0 {
+		t.Fatalf("missing marker or section text:\nsection: %q\nrow: %q", section, row)
+	}
+	if markerIndex != sectionTextIndex {
+		t.Fatalf("marker index = %d, want section text index %d:\nsection: %q\nrow: %q", markerIndex, sectionTextIndex, section, row)
+	}
+}
+
 func TestRenderBrowseSectionHeaderHighlightsActiveSection(t *testing.T) {
 	styles := newStyles(theme.Default())
 	active := renderBrowseSectionHeader("open sessions", true, styles, 80)
 	inactive := renderBrowseSectionHeader("open sessions", false, styles, 80)
-	if active == inactive {
-		t.Fatal("active section header matches inactive header")
+	if strings.Contains(ansi.Strip(active), "> open sessions") {
+		t.Fatalf("active header should not include cursor marker: %q", ansi.Strip(active))
 	}
-	if !strings.Contains(ansi.Strip(active), "> open sessions") {
-		t.Fatalf("active header missing cursor marker: %q", ansi.Strip(active))
+	if ansi.Strip(active) != ansi.Strip(inactive) {
+		t.Fatalf("active header text = %q, want inactive header text %q", ansi.Strip(active), ansi.Strip(inactive))
 	}
 }
 
@@ -854,6 +969,20 @@ func TestRenderBrowseColumnHeaderUsesFixedWidth(t *testing.T) {
 	rendered := renderBrowseColumnHeader(styles, 80, columns)
 	if got := lipgloss.Width(rendered); got > 80 {
 		t.Fatalf("header width = %d, want <= 80", got)
+	}
+}
+
+func TestRenderBrowseColumnHeaderFlexiblePathFillsWidth(t *testing.T) {
+	styles := newStyles(theme.Default())
+	columns := config.Columns{
+		Chip: config.Column{Show: true, Width: 12},
+		Root: config.Column{Show: true, Width: 12},
+		Name: config.Column{Show: true, Width: 20},
+		Path: config.Column{Show: true, Width: 0, MaxWidth: 0},
+	}
+	rendered := renderBrowseColumnHeader(styles, 80, columns)
+	if got := lipgloss.Width(rendered); got != 80 {
+		t.Fatalf("header width = %d, want 80", got)
 	}
 }
 
@@ -1388,7 +1517,7 @@ func TestUnselectedCandidateRowClipsLongMusicPathToWidth(t *testing.T) {
 	}
 }
 
-func TestLongPathColumnUsesEllipsisBeforeRightPadding(t *testing.T) {
+func TestLongPathColumnUsesEllipsisAndFitsWidth(t *testing.T) {
 	item := candidate{
 		kind: candidatePath,
 		fsPath: pathsearch.Candidate{
@@ -1398,8 +1527,8 @@ func TestLongPathColumnUsesEllipsisBeforeRightPadding(t *testing.T) {
 	}
 	row := renderCandidateRow(item, false, newStyles(theme.Default()), 80, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
 	stripped := ansi.Strip(row)
-	if got := lipgloss.Width(row); got > 78 {
-		t.Fatalf("row width = %d, want <= 78 to preserve right padding:\n%s", got, stripped)
+	if got := lipgloss.Width(row); got > 80 {
+		t.Fatalf("row width = %d, want <= 80:\n%s", got, stripped)
 	}
 	if !strings.Contains(stripped, "...") {
 		t.Fatalf("row missing ellipsis:\n%s", stripped)

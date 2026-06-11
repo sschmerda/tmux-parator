@@ -663,7 +663,7 @@ func (m Model) View() string {
 	var b strings.Builder
 	s := m.styles
 
-	b.WriteString(renderSearchBox("❯ ", m.filter, m.innerWidth(), s))
+	b.WriteString(renderInsetSearchBox("❯ ", m.filter, m.innerWidth(), s))
 	b.WriteString("\n\n")
 
 	if !m.loading && len(m.sessions) == 0 && len(m.rootItems) == 0 && m.err == nil && m.rootErr == nil {
@@ -673,15 +673,16 @@ func (m Model) View() string {
 
 	limit := m.listLimit()
 	columns := m.renderColumns(m.filtered)
+	contentWidth := m.contentWidth()
 	rowsUsed := 0
 	renderedCandidates := 0
 	if hasVisibleBrowseColumns(columns) && rowsUsed < limit {
-		b.WriteString(renderBrowseColumnHeader(s, m.innerWidth(), columns))
+		b.WriteString(renderInsetRow(renderColumnOffsetRow(renderBrowseColumnHeader(s, contentWidth-searchBoxInnerOffset, columns), s), m.innerWidth(), s))
 		b.WriteString("\n")
 		rowsUsed++
 	}
 	if m.showTopOverflow(limit) && rowsUsed < limit {
-		b.WriteString(s.muted.Render("..."))
+		b.WriteString(renderInsetRow(s.muted.Render("..."), m.innerWidth(), s))
 		b.WriteString("\n")
 		rowsUsed++
 	}
@@ -691,25 +692,25 @@ func (m Model) View() string {
 			break
 		}
 		if m.sectionHeaderBefore(i) {
-			b.WriteString(renderBrowseSectionHeader(m.sectionTitleForIndex(i), browseSectionRank(item) == m.currentBrowseSectionRank(), s, m.innerWidth()))
+			b.WriteString(renderInsetDividerRow(renderBrowseSectionHeader(m.sectionTitleForIndex(i), browseSectionRank(item) == m.currentBrowseSectionRank(), s, contentWidth+1), m.innerWidth(), s))
 			b.WriteString("\n")
 			rowsUsed++
 			if rowsUsed >= limit {
 				break
 			}
 		}
-		b.WriteString(m.renderCandidateRow(item, i == m.cursor, m.innerWidth(), columns))
+		b.WriteString(renderInsetRow(m.renderCandidateRow(item, i == m.cursor, contentWidth, columns), m.innerWidth(), s))
 		b.WriteString("\n")
 		rowsUsed++
 		renderedCandidates++
 	}
 
 	if m.scroll+renderedCandidates < len(m.filtered) && rowsUsed < limit {
-		b.WriteString(s.muted.Render("..."))
+		b.WriteString(renderInsetRow(s.muted.Render("..."), m.innerWidth(), s))
 		b.WriteString("\n")
 	}
 
-	appendAnchoredFooter(&b, renderStatusFooter(false, m.discovery.SkipHidden, m.discovery.SkipGitignored, helpText, m.innerWidth(), s), m.innerHeight())
+	appendAnchoredFooter(&b, renderInsetRow(renderFooterAlignedRow(renderStatusFooter(false, m.discovery.SkipHidden, m.discovery.SkipGitignored, helpText, contentWidth-searchBoxInnerOffset, s), s), m.innerWidth(), s), m.innerHeight())
 	return m.renderWithOverlay(b.String())
 }
 
@@ -717,7 +718,7 @@ func (m Model) pathSearchView() string {
 	var b strings.Builder
 	s := m.styles
 
-	b.WriteString(renderSearchBox("path ❯ ", m.pathInput, m.innerWidth(), s))
+	b.WriteString(renderInsetSearchBox("path ❯ ", m.pathInput, m.innerWidth(), s))
 	b.WriteString("\n\n")
 
 	if !m.pathBusy && len(m.pathResult) == 0 && m.pathErr == nil {
@@ -727,10 +728,11 @@ func (m Model) pathSearchView() string {
 
 	limit := m.pathListLimit()
 	columns := m.renderColumns(m.pathResult)
+	contentWidth := m.contentWidth()
 	rowsUsed := 0
 	renderedCandidates := 0
 	if m.showPathTopOverflow(limit) && rowsUsed < limit {
-		b.WriteString(s.muted.Render("..."))
+		b.WriteString(renderInsetRow(s.muted.Render("..."), m.innerWidth(), s))
 		b.WriteString("\n")
 		rowsUsed++
 	}
@@ -739,13 +741,13 @@ func (m Model) pathSearchView() string {
 			break
 		}
 		item := m.pathResult[i]
-		b.WriteString(m.renderCandidateRow(item, i == m.pathCursor, m.innerWidth(), columns))
+		b.WriteString(renderInsetRow(m.renderCandidateRow(item, i == m.pathCursor, contentWidth, columns), m.innerWidth(), s))
 		b.WriteString("\n")
 		rowsUsed++
 		renderedCandidates++
 	}
 	if m.pathScroll+renderedCandidates < len(m.pathResult) && rowsUsed < limit {
-		b.WriteString(s.muted.Render("..."))
+		b.WriteString(renderInsetRow(s.muted.Render("..."), m.innerWidth(), s))
 		b.WriteString("\n")
 	}
 
@@ -753,7 +755,7 @@ func (m Model) pathSearchView() string {
 	if m.pathErr != nil {
 		footerHelp = "error: " + m.pathErr.Error() + " | " + pathSearchHelpText
 	}
-	appendAnchoredFooter(&b, renderStatusFooter(true, m.pathConfig.options.SkipHidden, m.pathConfig.options.SkipGitignored, footerHelp, m.innerWidth(), s), m.innerHeight())
+	appendAnchoredFooter(&b, renderInsetRow(renderFooterAlignedRow(renderStatusFooter(true, m.pathConfig.options.SkipHidden, m.pathConfig.options.SkipGitignored, footerHelp, contentWidth-searchBoxInnerOffset, s), s), m.innerWidth(), s), m.innerHeight())
 	return m.renderWithOverlay(b.String())
 }
 
@@ -1492,6 +1494,14 @@ func (m Model) innerWidth() int {
 	return m.width - 2
 }
 
+func (m Model) contentWidth() int {
+	width := m.innerWidth() - rowLeftInset() - rowRightInset()
+	if width < 1 {
+		return m.innerWidth()
+	}
+	return width
+}
+
 func (m Model) innerHeight() int {
 	if m.height < 3 {
 		return m.height
@@ -2117,7 +2127,7 @@ func renderBrowseSectionHeader(title string, active bool, s styles, width int) s
 			Foreground(s.popupAccent.GetForeground()).
 			Bold(true)
 		lineStyle = s.filterLabel
-		labelText = "> " + title + " "
+		labelText = "  " + title + " "
 	}
 	prefix := labelStyle.Render(labelText)
 	lineWidth := width - lipgloss.Width(prefix)
@@ -2154,7 +2164,7 @@ func renderBrowseColumnHeader(s styles, width int, columns config.Columns) strin
 	pathWidth := columns.Path.Width
 	if pathWidth <= 0 {
 		prefixWidth := lipgloss.Width("  " + renderedColumns + "  ")
-		pathWidth = width - prefixWidth - 2
+		pathWidth = width - prefixWidth
 		if pathWidth < 1 {
 			pathWidth = 1
 		}
@@ -2332,12 +2342,17 @@ func renderPathColumn(item candidate, detail string, detailStyle lipgloss.Style,
 
 func renderCandidateRow(item candidate, selected bool, s styles, width int, glyphs config.Glyphs, glyphColors config.GlyphColors, columns config.Columns) string {
 	columns = normalizeUIColumns(columns)
-	columns = fitPathColumnToRow(item, s, glyphs, glyphColors, columns, width)
+	columnWidth := width - searchBoxInnerOffset
+	if columnWidth < 1 {
+		columnWidth = width
+	}
+	columns = fitPathColumnToRow(item, s, glyphs, glyphColors, columns, columnWidth)
+	columnGap := s.root.Render(strings.Repeat(" ", searchBoxInnerOffset))
 	if selected {
-		line := s.glyph.Render("▌") + s.selected.Render(" ") + renderCandidate(item, true, s, glyphs, glyphColors, columns)
+		line := s.root.Render("  ") + s.glyph.Render("▌") + s.selected.Render(" ") + renderCandidate(item, true, s, glyphs, glyphColors, columns)
 		return padSelectedRow(line, width, s)
 	}
-	return fitRow("  "+renderCandidate(item, false, s, glyphs, glyphColors, columns), width)
+	return fitRow("  "+columnGap+renderCandidate(item, false, s, glyphs, glyphColors, columns), width)
 }
 
 func fitPathColumnToRow(item candidate, s styles, glyphs config.Glyphs, glyphColors config.GlyphColors, columns config.Columns, width int) config.Columns {
@@ -2345,7 +2360,7 @@ func fitPathColumnToRow(item candidate, s styles, glyphs config.Glyphs, glyphCol
 		return columns
 	}
 	prefixWidth := lipgloss.Width("  " + renderCandidate(item, false, s, glyphs, glyphColors, withoutPathColumn(columns)) + "  ")
-	available := width - prefixWidth - 2
+	available := width - prefixWidth
 	if available < 1 {
 		available = 1
 	}
@@ -2400,6 +2415,75 @@ func renderSearchBox(prompt string, value string, width int, s styles) string {
 		s.search.Render(truncate(value, inputBudget)) +
 		s.searchPrompt.Render(cursor)
 	return s.searchBox.Width(boxWidth).Render(content)
+}
+
+const searchBoxSideInset = 2
+const columnGutterWidth = 2
+const searchBoxInnerOffset = 1
+
+func renderInsetSearchBox(prompt string, value string, width int, s styles) string {
+	leftInset := searchBoxOuterInset()
+	rightInset := searchBoxOuterInset()
+	if width <= leftInset+rightInset+4 {
+		return renderSearchBox(prompt, value, width, s)
+	}
+	return lipgloss.NewStyle().
+		Width(width).
+		Background(s.root.GetBackground()).
+		PaddingLeft(leftInset).
+		PaddingRight(rightInset).
+		Render(renderSearchBox(prompt, value, width-leftInset-rightInset, s))
+}
+
+func renderInsetRow(row string, width int, s styles) string {
+	return renderInsetRowWithInsets(row, width, rowLeftInset(), rowRightInset(), s)
+}
+
+func renderInsetDividerRow(row string, width int, s styles) string {
+	rightInset := rowRightInset() - 1
+	if rightInset < 0 {
+		rightInset = 0
+	}
+	return renderInsetRowWithInsets(row, width, rowLeftInset(), rightInset, s)
+}
+
+func renderInsetRowWithInsets(row string, width int, leftInset int, rightInset int, s styles) string {
+	if width <= leftInset+rightInset {
+		return fitRow(row, width)
+	}
+	contentWidth := width - leftInset - rightInset
+	row = fitRow(row, contentWidth)
+	padding := contentWidth - lipgloss.Width(row)
+	if padding < 0 {
+		padding = 0
+	}
+	leftPad := s.root.Render(strings.Repeat(" ", leftInset))
+	rightPad := s.root.Render(strings.Repeat(" ", rightInset))
+	return leftPad + row + s.root.Render(strings.Repeat(" ", padding)) + rightPad
+}
+
+func rowLeftInset() int {
+	return searchBoxSideInset
+}
+
+func rowRightInset() int {
+	return searchBoxOuterInset() + searchBoxInnerOffset
+}
+
+func renderColumnOffsetRow(row string, s styles) string {
+	return s.root.Render(strings.Repeat(" ", searchBoxInnerOffset)) + row
+}
+
+func renderFooterAlignedRow(row string, s styles) string {
+	return s.root.Render(strings.Repeat(" ", columnGutterWidth+searchBoxInnerOffset)) + row
+}
+
+func searchBoxOuterInset() int {
+	return searchBoxSideInset + columnGutterWidth
+}
+
+func searchBoxTextInset() int {
+	return 2
 }
 
 func renderStatusFooter(pathMode bool, skipHidden bool, skipGitignored bool, help string, width int, s styles) string {
