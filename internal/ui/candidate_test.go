@@ -811,6 +811,26 @@ func TestMainViewRendersBrowseColumnHeaders(t *testing.T) {
 	}
 }
 
+func TestMainViewRendersRoundedAppFrame(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.width = 80
+	model.height = 16
+	model.sessions = []tmux.Session{{Name: "main"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	lines := strings.Split(ansi.Strip(model.View()), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("view has too few lines:\n%s", model.View())
+	}
+	if !strings.HasPrefix(lines[0], "╭") || !strings.HasSuffix(lines[0], "╮") {
+		t.Fatalf("top frame = %q, want rounded corners", lines[0])
+	}
+	if !strings.HasPrefix(lines[len(lines)-1], "╰") || !strings.HasSuffix(lines[len(lines)-1], "╯") {
+		t.Fatalf("bottom frame = %q, want rounded corners", lines[len(lines)-1])
+	}
+}
+
 func TestRenderBrowseSectionHeaderHighlightsActiveSection(t *testing.T) {
 	styles := newStyles(theme.Default())
 	active := renderBrowseSectionHeader("open sessions", true, styles, 80)

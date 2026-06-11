@@ -156,6 +156,7 @@ type styles struct {
 	search        lipgloss.Style
 	searchPrompt  lipgloss.Style
 	searchBox     lipgloss.Style
+	appFrame      lipgloss.Style
 	popupFrame    lipgloss.Style
 	popupBody     lipgloss.Style
 	popupMuted    lipgloss.Style
@@ -219,6 +220,11 @@ func newStyles(activeTheme theme.Theme) styles {
 			BorderBackground(background).
 			Background(lipgloss.Color(activeTheme.SearchBG)).
 			Padding(0, 1),
+		appFrame: lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color(activeTheme.PaletteBorder)).
+			BorderBackground(background).
+			Background(background),
 		popupFrame: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(activeTheme.Header)).
 			Background(modalBackground).
@@ -657,7 +663,7 @@ func (m Model) View() string {
 	var b strings.Builder
 	s := m.styles
 
-	b.WriteString(renderSearchBox("❯ ", m.filter, m.width, s))
+	b.WriteString(renderSearchBox("❯ ", m.filter, m.innerWidth(), s))
 	b.WriteString("\n\n")
 
 	if !m.loading && len(m.sessions) == 0 && len(m.rootItems) == 0 && m.err == nil && m.rootErr == nil {
@@ -685,7 +691,7 @@ func (m Model) View() string {
 			break
 		}
 		if m.sectionHeaderBefore(i) {
-			b.WriteString(renderBrowseSectionHeader(m.sectionTitleForIndex(i), browseSectionRank(item) == m.currentBrowseSectionRank(), s, m.width))
+			b.WriteString(renderBrowseSectionHeader(m.sectionTitleForIndex(i), browseSectionRank(item) == m.currentBrowseSectionRank(), s, m.innerWidth()))
 			b.WriteString("\n")
 			rowsUsed++
 			if rowsUsed >= limit {
@@ -703,7 +709,7 @@ func (m Model) View() string {
 		b.WriteString("\n")
 	}
 
-	appendAnchoredFooter(&b, renderStatusFooter(false, m.discovery.SkipHidden, m.discovery.SkipGitignored, helpText, m.width, s), m.height)
+	appendAnchoredFooter(&b, renderStatusFooter(false, m.discovery.SkipHidden, m.discovery.SkipGitignored, helpText, m.innerWidth(), s), m.innerHeight())
 	return m.renderWithOverlay(b.String())
 }
 
@@ -711,7 +717,7 @@ func (m Model) pathSearchView() string {
 	var b strings.Builder
 	s := m.styles
 
-	b.WriteString(renderSearchBox("path ❯ ", m.pathInput, m.width, s))
+	b.WriteString(renderSearchBox("path ❯ ", m.pathInput, m.innerWidth(), s))
 	b.WriteString("\n\n")
 
 	if !m.pathBusy && len(m.pathResult) == 0 && m.pathErr == nil {
@@ -747,7 +753,7 @@ func (m Model) pathSearchView() string {
 	if m.pathErr != nil {
 		footerHelp = "error: " + m.pathErr.Error() + " | " + pathSearchHelpText
 	}
-	appendAnchoredFooter(&b, renderStatusFooter(true, m.pathConfig.options.SkipHidden, m.pathConfig.options.SkipGitignored, footerHelp, m.width, s), m.height)
+	appendAnchoredFooter(&b, renderStatusFooter(true, m.pathConfig.options.SkipHidden, m.pathConfig.options.SkipGitignored, footerHelp, m.innerWidth(), s), m.innerHeight())
 	return m.renderWithOverlay(b.String())
 }
 
@@ -789,23 +795,25 @@ func (m *Model) toggleDiscoveryGitignored() {
 }
 
 func (m Model) renderWithOverlay(content string) string {
-	base := m.styles.root.Width(m.width).Height(m.height).Render(content)
+	innerWidth := m.innerWidth()
+	innerHeight := m.innerHeight()
+	base := m.styles.root.Width(innerWidth).Height(innerHeight).Render(content)
 	if m.mode == modeConfirmKill {
-		base = placeCenteredOverlay(base, renderConfirmKill(m.styles, m.confirmKillSessionName(), m.confirmChoice, m.width), m.width, m.height)
+		base = placeCenteredOverlay(base, renderConfirmKill(m.styles, m.confirmKillSessionName(), m.confirmChoice, innerWidth), innerWidth, innerHeight)
 	}
 	if m.mode == modeCreateSession {
-		base = placeCenteredOverlay(base, renderCreateSession(m.styles, m.createText, m.width), m.width, m.height)
+		base = placeCenteredOverlay(base, renderCreateSession(m.styles, m.createText, innerWidth), innerWidth, innerHeight)
 	}
 	if m.mode == modeCommands || (m.mode == modeHelp && m.previousMode == modeCommands) {
-		base = placeOverlay(base, renderCommandPalette(m.styles, m.commandMatches(), m.commandInput, m.commandCursor, m.commandScroll, m.width, m.height), m.width, m.height)
+		base = placeOverlay(base, renderCommandPalette(m.styles, m.commandMatches(), m.commandInput, m.commandCursor, m.commandScroll, innerWidth, innerHeight), innerWidth, innerHeight)
 	}
 	if m.mode == modeHelp {
-		base = placeOverlay(base, renderHelpPanel(m.styles, m.previousMode, m.helpCursor, m.helpScroll, m.width, m.height), m.width, m.height)
+		base = placeOverlay(base, renderHelpPanel(m.styles, m.previousMode, m.helpCursor, m.helpScroll, innerWidth, innerHeight), innerWidth, innerHeight)
 	}
 	if message, ok := m.errorMessage(); ok {
-		base = placeCenteredOverlay(base, renderErrorPopup(m.styles, message, m.width), m.width, m.height)
+		base = placeCenteredOverlay(base, renderErrorPopup(m.styles, message, innerWidth), innerWidth, innerHeight)
 	}
-	return base
+	return m.styles.appFrame.Width(innerWidth).Height(innerHeight).Render(base)
 }
 
 func placeOverlay(base string, overlay string, width int, height int) string {
@@ -1463,10 +1471,11 @@ func (m Model) listLimit() int {
 }
 
 func (m Model) availableListRows(visibleRows int) int {
-	if m.height <= 0 {
+	height := m.innerHeight()
+	if height <= 0 {
 		return visibleRows
 	}
-	limit := m.height - 7
+	limit := height - 7
 	if limit < 1 {
 		return 1
 	}
@@ -1477,10 +1486,17 @@ func (m Model) availableListRows(visibleRows int) int {
 }
 
 func (m Model) innerWidth() int {
-	if m.width < 1 {
+	if m.width < 3 {
 		return 80
 	}
-	return m.width
+	return m.width - 2
+}
+
+func (m Model) innerHeight() int {
+	if m.height < 3 {
+		return m.height
+	}
+	return m.height - 2
 }
 
 func (m Model) pathListLimit() int {

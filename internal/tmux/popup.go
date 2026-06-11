@@ -12,12 +12,9 @@ func OpenPopup(ctx context.Context, runner Runner, command string, width string,
 	if strings.TrimSpace(command) == "" {
 		return fmt.Errorf("popup command is empty")
 	}
-	args := []string{"display-popup", "-E"}
+	args := []string{"display-popup", "-E", "-B"}
 	if style := PopupStyle(activeTheme); style != "" {
 		args = append(args, "-s", style)
-	}
-	if borderStyle := PopupBorderStyle(activeTheme); borderStyle != "" {
-		args = append(args, "-S", borderStyle)
 	}
 	if strings.TrimSpace(width) == "" {
 		width = "90%"
@@ -35,10 +32,6 @@ func OpenPopup(ctx context.Context, runner Runner, command string, width string,
 
 func PopupStyle(activeTheme theme.Theme) string {
 	return style(activeTheme.Query, activeTheme.Background)
-}
-
-func PopupBorderStyle(activeTheme theme.Theme) string {
-	return style(activeTheme.PaletteBorder, activeTheme.Background)
 }
 
 func style(fg string, bg string) string {
