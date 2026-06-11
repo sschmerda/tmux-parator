@@ -520,8 +520,63 @@ killed.
 
 ## Roadmap
 
-Later versions will add richer git repository and worktree support, declarative
-tmux layouts, layout memory, and devcontainer runtimes.
+`tmux-parator` is built incrementally. The current version already includes
+the original v0.1 session workflow plus configured root discovery and path
+search. Future milestones should continue to keep the binary self-contained and
+avoid required dependencies on fuzzy finders or preview tools.
+
+### v0.1
+
+- Create Go module.
+- Add CLI entrypoint.
+- Add minimal Bubble Tea TUI.
+- List current tmux sessions.
+- Fuzzy/simple-filter sessions.
+- Switch to selected session.
+- Kill selected session with confirmation.
+- Add tests for parsing/helper logic.
+- Add README.
+
+### v0.2
+
+- Load TOML config.
+- Add configured roots.
+- Add `subdirs` discovery.
+- Add `repos` discovery.
+- Implement async Go filesystem traversal.
+- Add optional `fd` backend.
+
+### v0.3
+
+- Create tmux sessions from selected path/repo.
+- Add native layouts with multiple windows.
+- Add layout selection precedence.
+
+### v0.4
+
+- Add pane layouts.
+- Support hbox/vbox.
+- Support percentage sizes.
+
+### v0.5
+
+- Add worktree creation.
+- Add branch prompt.
+- Add `{repo}_{branch}` naming.
+- Add worktree workspace creation.
+
+### v0.6
+
+- Add layout memory.
+- Add state file.
+- Add script layout backend.
+
+### v0.7+
+
+- Add devcontainer runtime backend.
+- Add optional tmuxifier backend.
+- Add more advanced nested pane layouts.
+- Add worktree cleanup helpers for merged branches.
 
 ## Install
 
