@@ -2349,7 +2349,7 @@ func renderCandidateRow(item candidate, selected bool, s styles, width int, glyp
 	columns = fitPathColumnToRow(item, s, glyphs, glyphColors, columns, columnWidth)
 	columnGap := s.root.Render(strings.Repeat(" ", searchBoxInnerOffset))
 	if selected {
-		line := s.root.Render("  ") + s.glyph.Render("▌") + s.selected.Render(" ") + renderCandidate(item, true, s, glyphs, glyphColors, columns)
+		line := s.root.Render("  ") + s.glyph.Render("▌") + renderCandidate(item, true, s, glyphs, glyphColors, columns)
 		return padSelectedRow(line, width, s)
 	}
 	return fitRow("  "+columnGap+renderCandidate(item, false, s, glyphs, glyphColors, columns), width)

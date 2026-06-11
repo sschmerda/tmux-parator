@@ -1503,6 +1503,23 @@ func TestSelectedCandidateRowPadsToWidth(t *testing.T) {
 	}
 }
 
+func TestSelectedCandidateRowDoesNotShiftContent(t *testing.T) {
+	item := candidate{kind: candidateSession, session: tmux.Session{Name: "main", Metadata: tmux.SessionMetadata{Path: "/tmp/main"}}}
+	styles := newStyles(theme.Default())
+
+	selected := ansi.Strip(renderCandidateRow(item, true, styles, 80, config.Glyphs{}, config.GlyphColors{}, config.Columns{}))
+	unselected := ansi.Strip(renderCandidateRow(item, false, styles, 80, config.Glyphs{}, config.GlyphColors{}, config.Columns{}))
+
+	selectedNameIndex := renderedColumn(selected, "main")
+	unselectedNameIndex := renderedColumn(unselected, "main")
+	if selectedNameIndex < 0 || unselectedNameIndex < 0 {
+		t.Fatalf("missing candidate name:\nselected: %q\nunselected: %q", selected, unselected)
+	}
+	if selectedNameIndex != unselectedNameIndex {
+		t.Fatalf("selected name index = %d, want unselected name index %d:\nselected: %q\nunselected: %q", selectedNameIndex, unselectedNameIndex, selected, unselected)
+	}
+}
+
 func TestUnselectedCandidateRowClipsLongMusicPathToWidth(t *testing.T) {
 	item := candidate{
 		kind: candidatePath,
