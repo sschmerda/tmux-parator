@@ -98,6 +98,20 @@ func (c Client) KillSession(ctx context.Context, name string) error {
 	return nil
 }
 
+func (c Client) RenameSession(ctx context.Context, oldName string, newName string) error {
+	if err := validateSessionName(oldName); err != nil {
+		return err
+	}
+	if err := validateSessionName(newName); err != nil {
+		return err
+	}
+	out, err := c.runner.Run(ctx, "tmux", "rename-session", "-t", exactSessionTarget(oldName), newName)
+	if err != nil {
+		return commandError("rename tmux session", out, err)
+	}
+	return nil
+}
+
 func (c Client) NewSession(ctx context.Context, name string, path string, metadata SessionMetadata) error {
 	if err := validateSessionName(name); err != nil {
 		return err

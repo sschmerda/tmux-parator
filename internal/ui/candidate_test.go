@@ -820,6 +820,76 @@ func TestConfirmKillEnterCancelsByDefault(t *testing.T) {
 	}
 }
 
+func TestCtrlNOpensRenamePromptPrefilledWithSelectedSession(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.sessions = []tmux.Session{{Name: "main"}, {Name: "other"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlN})
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("ctrl-n returned command before rename submit")
+	}
+	if model.mode != modeRenameSession {
+		t.Fatalf("mode = %v, want rename session", model.mode)
+	}
+	if model.renameOriginal != "main" || model.renameText != "main" {
+		t.Fatalf("rename original/text = %q/%q, want main/main", model.renameOriginal, model.renameText)
+	}
+}
+
+func TestRenameSessionRejectsDuplicateName(t *testing.T) {
+	client := &fakeSessionClient{}
+	model := NewModel(client, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.sessions = []tmux.Session{{Name: "main"}, {Name: "other"}}
+	model.mode = modeRenameSession
+	model.renameOriginal = "main"
+	model.renameText = "other"
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("duplicate rename returned command")
+	}
+	if model.mode != modeRenameSession {
+		t.Fatalf("mode = %v, want rename session", model.mode)
+	}
+	if model.err == nil || !strings.Contains(model.err.Error(), "already exists") {
+		t.Fatalf("err = %v, want duplicate error", model.err)
+	}
+	if client.renamedOld != "" || client.renamedNew != "" {
+		t.Fatalf("rename client used for duplicate: %#v", client)
+	}
+}
+
+func TestRenameSessionCallsClient(t *testing.T) {
+	client := &fakeSessionClient{}
+	model := NewModel(client, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.sessions = []tmux.Session{{Name: "main"}, {Name: "other"}}
+	model.mode = modeRenameSession
+	model.renameOriginal = "main"
+	model.renameText = "renamed"
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+
+	if model.mode != modeBrowse || !model.loading {
+		t.Fatalf("mode/loading = %v/%v, want browse/loading", model.mode, model.loading)
+	}
+	if cmd == nil {
+		t.Fatal("rename returned nil command")
+	}
+	if msg := cmd(); msg.(renamedMsg).err != nil {
+		t.Fatalf("renamedMsg err = %v", msg.(renamedMsg).err)
+	}
+	if client.renamedOld != "main" || client.renamedNew != "renamed" {
+		t.Fatalf("rename = %q/%q, want main/renamed", client.renamedOld, client.renamedNew)
+	}
+}
+
 func TestMainViewUsesStatusChipsInsteadOfPromptStatusLine(t *testing.T) {
 	model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true, SkipGitignored: false}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
 	model.width = 100
@@ -1134,6 +1204,8 @@ type fakeSessionClient struct {
 	switchLastCalls    int
 	killCalls          int
 	killedSession      string
+	renamedOld         string
+	renamedNew         string
 	switchedSession    string
 	newSessionName     string
 	newSessionPath     string
@@ -1159,6 +1231,12 @@ func (f *fakeSessionClient) SwitchLastSession(context.Context) error {
 func (f *fakeSessionClient) KillSession(_ context.Context, session string) error {
 	f.killCalls++
 	f.killedSession = session
+	return nil
+}
+
+func (f *fakeSessionClient) RenameSession(_ context.Context, oldName string, newName string) error {
+	f.renamedOld = oldName
+	f.renamedNew = newName
 	return nil
 }
 

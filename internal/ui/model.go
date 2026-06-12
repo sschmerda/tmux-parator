@@ -27,6 +27,7 @@ type sessionClient interface {
 	SwitchSession(context.Context, string) error
 	SwitchLastSession(context.Context) error
 	KillSession(context.Context, string) error
+	RenameSession(context.Context, string, string) error
 	NewSession(context.Context, string, string, tmux.SessionMetadata) error
 	TagSession(context.Context, string, tmux.SessionMetadata) error
 }
@@ -39,6 +40,7 @@ const (
 	modeCommands
 	modeHelp
 	modeCreateSession
+	modeRenameSession
 	modePathSearch
 	modeConfirmCreatePath
 )
@@ -71,6 +73,8 @@ type Model struct {
 	pathRoot             string
 	createPathInput      string
 	createText           string
+	renameText           string
+	renameOriginal       string
 	cursor               int
 	scroll               int
 	filterRestoreCursor  int
@@ -119,6 +123,10 @@ type switchedMsg struct {
 }
 
 type killedMsg struct {
+	err error
+}
+
+type renamedMsg struct {
 	err error
 }
 
@@ -295,6 +303,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.loadSessions()
+	case renamedMsg:
+		m.loading = false
+		m.mode = modeBrowse
+		m.err = msg.err
+		if msg.err != nil {
+			return m, nil
+		}
+		return m, m.loadSessions()
 	case createdMsg:
 		m.loading = false
 		m.mode = modeBrowse
@@ -403,6 +419,9 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.mode == modeCreateSession {
 		return m.updateCreateKey(msg)
 	}
+	if m.mode == modeRenameSession {
+		return m.updateRenameKey(msg)
+	}
 	if m.mode == modeConfirmCreatePath {
 		switch msg.String() {
 		case "y", "Y":
@@ -462,6 +481,8 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.loading = true
 		return m, tea.Batch(m.loadSessions(), m.loadRoots())
 	case "ctrl+n":
+		return m.openRenameSession()
+	case "ctrl+s":
 		m.mode = modeCreateSession
 		m.createText = ""
 	case "ctrl+t":
@@ -581,6 +602,47 @@ func (m Model) updateCreateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	default:
 		if len(msg.Runes) > 0 {
 			m.createText += string(msg.Runes)
+		}
+	}
+	return m, nil
+}
+
+func (m Model) updateRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.mode = modeBrowse
+		m.renameText = ""
+		m.renameOriginal = ""
+	case "enter":
+		name := strings.TrimSpace(m.renameText)
+		if name == "" {
+			m.err = fmt.Errorf("session name is empty")
+			return m, nil
+		}
+		if name == m.renameOriginal {
+			m.mode = modeBrowse
+			m.renameText = ""
+			m.renameOriginal = ""
+			return m, nil
+		}
+		if m.hasSessionExcept(name, m.renameOriginal) {
+			m.err = fmt.Errorf("session name already exists: %s", name)
+			return m, nil
+		}
+		m.loading = true
+		m.mode = modeBrowse
+		original := m.renameOriginal
+		m.renameText = ""
+		m.renameOriginal = ""
+		return m, m.renameSession(original, name)
+	case "backspace", "ctrl+h":
+		if m.renameText != "" {
+			runes := []rune(m.renameText)
+			m.renameText = string(runes[:len(runes)-1])
+		}
+	default:
+		if len(msg.Runes) > 0 {
+			m.renameText += string(msg.Runes)
 		}
 	}
 	return m, nil
@@ -854,6 +916,9 @@ func (m Model) renderWithOverlay(content string) string {
 	}
 	if m.mode == modeCreateSession {
 		base = placeCenteredOverlay(base, renderCreateSession(m.styles, m.createText, innerWidth), innerWidth, innerHeight)
+	}
+	if m.mode == modeRenameSession {
+		base = placeCenteredOverlay(base, renderRenameSession(m.styles, m.renameText, innerWidth), innerWidth, innerHeight)
 	}
 	if m.mode == modeCommands || (m.mode == modeHelp && m.previousMode == modeCommands) {
 		base = placeOverlay(base, renderCommandPalette(m.styles, m.commandMatches(), m.commandInput, m.commandCursor, m.commandScroll, innerWidth, innerHeight), innerWidth, innerHeight)
@@ -1514,6 +1579,17 @@ func (m Model) confirmKill() (tea.Model, tea.Cmd) {
 	return m, m.killSession(selected.session.Name)
 }
 
+func (m Model) openRenameSession() (tea.Model, tea.Cmd) {
+	selected, ok := m.selected()
+	if !ok || selected.kind != candidateSession {
+		return m, nil
+	}
+	m.mode = modeRenameSession
+	m.renameOriginal = selected.session.Name
+	m.renameText = selected.session.Name
+	return m, nil
+}
+
 func (m Model) openCreateTypedPathConfirmation() (tea.Model, tea.Cmd) {
 	if _, ok, err := m.missingTypedPathCandidate(); !ok {
 		m.pathErr = err
@@ -1862,6 +1938,12 @@ func (m Model) killSession(name string) tea.Cmd {
 	}
 }
 
+func (m Model) renameSession(oldName string, newName string) tea.Cmd {
+	return func() tea.Msg {
+		return renamedMsg{err: m.client.RenameSession(context.Background(), oldName, newName)}
+	}
+}
+
 func (m Model) createSession(name string, path string) tea.Cmd {
 	return m.createSessionWithMetadata(name, path, tmux.SessionMetadata{})
 }
@@ -1999,6 +2081,18 @@ func (m Model) availableSessionName(base string) string {
 
 func (m Model) hasSession(name string) bool {
 	for _, session := range m.sessions {
+		if session.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (m Model) hasSessionExcept(name string, except string) bool {
+	for _, session := range m.sessions {
+		if session.Name == except {
+			continue
+		}
 		if session.Name == name {
 			return true
 		}
@@ -2833,6 +2927,7 @@ const (
 	commandOpenTyped     commandID = "open-typed"
 	commandCreateTyped   commandID = "create-typed-path"
 	commandKillSession   commandID = "kill-session"
+	commandRenameSession commandID = "rename-session"
 	commandNewSession    commandID = "new-session"
 	commandPathSearch    commandID = "path-search"
 	commandCycleRoot     commandID = "cycle-root"
@@ -2903,22 +2998,26 @@ func (m Model) commandItems() []commandItem {
 	specs := browseCommandSpecs()
 	selected, ok := m.selected()
 	killReason := ""
+	sessionReason := ""
 	if !ok {
 		killReason = "There is no selected candidate."
+		sessionReason = "There is no selected candidate."
 	} else if selected.kind != candidateSession {
 		killReason = "The selected candidate is not an open tmux session."
+		sessionReason = "The selected candidate is not an open tmux session."
 	}
 	return []commandItem{
 		commandItemFromSpec(specs[0], ok, "There is no selected candidate."),
 		commandItemFromSpec(specs[1], true, ""),
 		commandItemFromSpec(specs[2], killReason == "", killReason),
-		commandItemFromSpec(specs[3], true, ""),
-		commandItemFromSpec(specs[4], m.pathConfig.enabled, "Path search is disabled in config."),
-		commandItemFromSpec(specs[5], true, ""),
+		commandItemFromSpec(specs[3], sessionReason == "", sessionReason),
+		commandItemFromSpec(specs[4], true, ""),
+		commandItemFromSpec(specs[5], m.pathConfig.enabled, "Path search is disabled in config."),
 		commandItemFromSpec(specs[6], true, ""),
 		commandItemFromSpec(specs[7], true, ""),
 		commandItemFromSpec(specs[8], true, ""),
 		commandItemFromSpec(specs[9], true, ""),
+		commandItemFromSpec(specs[10], true, ""),
 	}
 }
 
@@ -2960,7 +3059,8 @@ func browseCommandSpecs() []commandSpec {
 		{ID: commandOpenSelected, Title: "Open selected", Key: "<enter>", Description: "Switch to an existing session or create one for the selected root."},
 		{ID: commandOpenLast, Title: "Open last session", Key: "<c-`>", Description: "Switch to tmux's last active session."},
 		{ID: commandKillSession, Title: "Kill selected session", Key: "<c-k>", Description: "Ask for confirmation before killing the selected tmux session."},
-		{ID: commandNewSession, Title: "Create session in current path", Key: "<c-n>", Description: "Create a path session in the current working directory."},
+		{ID: commandRenameSession, Title: "Rename selected session", Key: "<c-n>", Description: "Rename the selected open tmux session."},
+		{ID: commandNewSession, Title: "Create session in current path", Key: "<c-s>", Description: "Create a path session in the current working directory."},
 		{ID: commandPathSearch, Title: "Create session from path", Key: "<c-t>", Description: "Open filesystem path search, then create or switch to a session for the selected path."},
 		{ID: commandToggleHidden, Title: "Toggle hidden configured paths", Key: "<meta-h>", Description: "Toggle whether hidden directories are skipped for configured repos and subdirs."},
 		{ID: commandToggleIgnored, Title: "Toggle gitignored configured paths", Key: "<meta-i>", Description: "Toggle whether gitignored directories are skipped for configured repos and subdirs."},
@@ -3034,6 +3134,8 @@ func (m Model) runCommand(item commandItem) (tea.Model, tea.Cmd) {
 	case commandKillSession:
 		m.mode = modeConfirmKill
 		m.confirmChoice = confirmCancel
+	case commandRenameSession:
+		return m.openRenameSession()
 	case commandNewSession:
 		m.mode = modeCreateSession
 		m.createText = ""
@@ -3252,6 +3354,14 @@ func renderConfirmAction(label string, key string, selected bool, s styles) stri
 }
 
 func renderCreateSession(s styles, value string, appWidth int) string {
+	return renderNamePrompt(s, "Create Session", "Create a path session in the current path.", "create", value, appWidth)
+}
+
+func renderRenameSession(s styles, value string, appWidth int) string {
+	return renderNamePrompt(s, "Rename Session", "Rename the selected tmux session.", "rename", value, appWidth)
+}
+
+func renderNamePrompt(s styles, title string, message string, action string, value string, appWidth int) string {
 	width := helpPanelWidth(appWidth)
 	if width > 72 {
 		width = 72
@@ -3264,13 +3374,13 @@ func renderCreateSession(s styles, value string, appWidth int) string {
 		bodyWidth = 20
 	}
 	lines := []string{
-		s.popupMuted.Render("Create a path session in the current path."),
+		s.popupMuted.Render(message),
 		"",
 		renderSearchBox("name ❯ ", value, bodyWidth, s),
 		"",
-		s.popupAccent.Render("<enter>") + s.popupMuted.Render(" create") + s.popupBody.Render("   ") + s.popupAccent.Render("<esc>") + s.popupMuted.Render(" cancel"),
+		s.popupAccent.Render("<enter>") + s.popupMuted.Render(" "+action) + s.popupBody.Render("   ") + s.popupAccent.Render("<esc>") + s.popupMuted.Render(" cancel"),
 	}
-	return renderCenteredTitledBox("Create Session", "", strings.Join(lines, "\n"), width, len(lines)+4, 3, s)
+	return renderCenteredTitledBox(title, "", strings.Join(lines, "\n"), width, len(lines)+4, 3, s)
 }
 
 func renderErrorPopup(s styles, message string, appWidth int) string {
@@ -3741,7 +3851,7 @@ func helpItemsForMode(previous mode) []helpItem {
 			{Key: "<c-g>", Action: "close palette", Description: "Close the command palette and return to the previous mode."},
 			{Key: "<esc>", Action: "close palette/help", Description: "Close help, then close the command palette when pressed again."},
 			{Key: "<c-?>", Action: "toggle help", Description: "Show or close this help popup."},
-			{Key: "Quit command", Action: specs[9].Title, Description: specs[9].Description},
+			{Key: "Quit command", Action: specs[10].Title, Description: specs[10].Description},
 		}
 	}
 	specs := browseCommandSpecs()
@@ -3754,11 +3864,12 @@ func helpItemsForMode(previous mode) []helpItem {
 		helpItemFromSpec(specs[1]),
 		helpItemFromSpec(specs[3]),
 		helpItemFromSpec(specs[4]),
-		helpItemFromSpec(specs[7]),
 		helpItemFromSpec(specs[5]),
-		helpItemFromSpec(specs[6]),
-		helpItemFromSpec(specs[2]),
 		helpItemFromSpec(specs[8]),
+		helpItemFromSpec(specs[6]),
+		helpItemFromSpec(specs[7]),
+		helpItemFromSpec(specs[2]),
 		helpItemFromSpec(specs[9]),
+		helpItemFromSpec(specs[10]),
 	}
 }

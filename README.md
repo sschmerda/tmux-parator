@@ -43,13 +43,14 @@ tmux-parator --popup
 - `Tab` jumps to the next main-list section; `Shift-Tab` jumps to the previous
   section.
 - `Ctrl-g` opens the fuzzy command palette.
-- `Ctrl-n` creates a tmux session in the current path.
+- `Ctrl-n` renames the selected open tmux session.
+- `Ctrl-s` creates a tmux session in the current path.
 - `Ctrl-t` starts the create-session-from-path flow.
 - `Ctrl-r` reloads sessions and configured roots.
 - `Ctrl-k` asks to kill the selected session.
 - `Meta-h` toggles hidden-directory skipping for configured roots.
 - `Meta-i` toggles gitignored-directory skipping for configured roots.
-- `?` shows help.
+- `Ctrl-?` shows help.
 - `Esc` quits or cancels the current overlay.
 
 Confirmation popups:

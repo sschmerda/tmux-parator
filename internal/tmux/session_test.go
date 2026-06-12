@@ -142,6 +142,20 @@ func TestSwitchLastSessionUsesTmuxLastSession(t *testing.T) {
 	}
 }
 
+func TestRenameSessionUsesExactOldSessionTarget(t *testing.T) {
+	runner := &recordingRunner{}
+	client := NewClient(runner)
+
+	if err := client.RenameSession(context.Background(), "old:name", "new-name"); err != nil {
+		t.Fatalf("RenameSession() unexpected error: %v", err)
+	}
+
+	want := [][]string{{"tmux", "rename-session", "-t", "=old:name:", "new-name"}}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("runner calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
 func TestListSessionsRequestsPaneCurrentPath(t *testing.T) {
 	runner := &recordingRunner{}
 	client := NewClient(runner)
