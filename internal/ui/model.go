@@ -73,6 +73,8 @@ type Model struct {
 	pathRoot             string
 	createPathInput      string
 	createText           string
+	createPath           string
+	createMetadata       tmux.SessionMetadata
 	renameText           string
 	renameOriginal       string
 	cursor               int
@@ -483,8 +485,7 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+n":
 		return m.openRenameSession()
 	case "ctrl+s":
-		m.mode = modeCreateSession
-		m.createText = ""
+		m.openCreateSession()
 	case "ctrl+t":
 		return m.openPathSearch()
 	case "alt+h", "meta+h":
@@ -574,26 +575,32 @@ func (m Model) updateCreateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		m.mode = modeBrowse
+		m.createText = ""
+		m.createPath = ""
+		m.createMetadata = tmux.SessionMetadata{}
 	case "enter":
 		name := strings.TrimSpace(m.createText)
 		if name == "" {
+			m.err = fmt.Errorf("session name is empty")
 			return m, nil
 		}
-		wd, err := os.Getwd()
-		if err != nil {
-			m.err = fmt.Errorf("resolve current path: %w", err)
-			m.mode = modeBrowse
+		if m.hasSession(name) {
+			m.err = fmt.Errorf("session name already exists: %s", name)
 			return m, nil
 		}
+		path := strings.TrimSpace(m.createPath)
+		if path == "" {
+			m.err = fmt.Errorf("selected item has no path")
+			return m, nil
+		}
+		metadata := m.createMetadata
+		metadata.BaseName = sanitizeSessionName(name)
 		m.loading = true
 		m.mode = modeBrowse
-		return m, m.createSessionWithMetadata(name, "", tmux.SessionMetadata{
-			CreatedByParator: true,
-			Kind:             "path",
-			Path:             wd,
-			Glyph:            m.glyphs.Path,
-			GlyphColor:       m.glyphColors.Path,
-		})
+		m.createText = ""
+		m.createPath = ""
+		m.createMetadata = tmux.SessionMetadata{}
+		return m, m.createSessionWithMetadata(name, path, metadata)
 	case "backspace", "ctrl+h":
 		if m.createText != "" {
 			runes := []rune(m.createText)
@@ -1588,6 +1595,61 @@ func (m Model) openRenameSession() (tea.Model, tea.Cmd) {
 	m.renameOriginal = selected.session.Name
 	m.renameText = selected.session.Name
 	return m, nil
+}
+
+func (m *Model) openCreateSession() {
+	selected, ok := m.selected()
+	if !ok {
+		return
+	}
+	path, metadata, ok := m.namedSessionTarget(selected)
+	if !ok {
+		m.err = fmt.Errorf("selected item has no path")
+		return
+	}
+	m.mode = modeCreateSession
+	m.createText = selected.sessionName()
+	m.createPath = path
+	m.createMetadata = metadata
+}
+
+func (m Model) namedSessionTarget(selected candidate) (string, tmux.SessionMetadata, bool) {
+	switch selected.kind {
+	case candidateSession:
+		path := sessionDisplayPath(selected.session)
+		if strings.TrimSpace(path) == "" {
+			return "", tmux.SessionMetadata{}, false
+		}
+		metadata := selected.session.Metadata
+		metadata.CreatedByParator = true
+		metadata.Kind = originLabel(candidateOrigin(selected))
+		if strings.TrimSpace(metadata.Path) == "" {
+			metadata.Path = path
+		}
+		if strings.TrimSpace(metadata.Glyph) == "" {
+			metadata.Glyph = originGlyph(metadata.Kind, m.glyphs)
+		}
+		if strings.TrimSpace(metadata.GlyphColor) == "" {
+			metadata.GlyphColor = string(originGlyphColor(metadata.Kind, false, m.glyphColors))
+		}
+		return path, metadata, true
+	case candidateRoot, candidatePath:
+		path := selected.path()
+		if strings.TrimSpace(path) == "" {
+			return "", tmux.SessionMetadata{}, false
+		}
+		metadata := selected.sessionMetadata()
+		metadata.CreatedByParator = true
+		if strings.TrimSpace(metadata.Glyph) == "" {
+			metadata.Glyph = originGlyph(metadata.Kind, m.glyphs)
+		}
+		if strings.TrimSpace(metadata.GlyphColor) == "" {
+			metadata.GlyphColor = string(originGlyphColor(metadata.Kind, false, m.glyphColors))
+		}
+		return path, metadata, true
+	default:
+		return "", tmux.SessionMetadata{}, false
+	}
 }
 
 func (m Model) openCreateTypedPathConfirmation() (tea.Model, tea.Cmd) {
@@ -2999,19 +3061,26 @@ func (m Model) commandItems() []commandItem {
 	selected, ok := m.selected()
 	killReason := ""
 	sessionReason := ""
+	createNamedReason := ""
 	if !ok {
 		killReason = "There is no selected candidate."
 		sessionReason = "There is no selected candidate."
+		createNamedReason = "There is no selected candidate."
 	} else if selected.kind != candidateSession {
 		killReason = "The selected candidate is not an open tmux session."
 		sessionReason = "The selected candidate is not an open tmux session."
+	}
+	if ok {
+		if _, _, targetOK := m.namedSessionTarget(selected); !targetOK {
+			createNamedReason = "The selected candidate has no path."
+		}
 	}
 	return []commandItem{
 		commandItemFromSpec(specs[0], ok, "There is no selected candidate."),
 		commandItemFromSpec(specs[1], true, ""),
 		commandItemFromSpec(specs[2], killReason == "", killReason),
 		commandItemFromSpec(specs[3], sessionReason == "", sessionReason),
-		commandItemFromSpec(specs[4], true, ""),
+		commandItemFromSpec(specs[4], createNamedReason == "", createNamedReason),
 		commandItemFromSpec(specs[5], m.pathConfig.enabled, "Path search is disabled in config."),
 		commandItemFromSpec(specs[6], true, ""),
 		commandItemFromSpec(specs[7], true, ""),
@@ -3060,7 +3129,7 @@ func browseCommandSpecs() []commandSpec {
 		{ID: commandOpenLast, Title: "Open last session", Key: "<c-`>", Description: "Switch to tmux's last active session."},
 		{ID: commandKillSession, Title: "Kill selected session", Key: "<c-k>", Description: "Ask for confirmation before killing the selected tmux session."},
 		{ID: commandRenameSession, Title: "Rename selected session", Key: "<c-n>", Description: "Rename the selected open tmux session."},
-		{ID: commandNewSession, Title: "Create session in current path", Key: "<c-s>", Description: "Create a path session in the current working directory."},
+		{ID: commandNewSession, Title: "Create named session", Key: "<c-s>", Description: "Create a new named tmux session from the selected row's path and kind."},
 		{ID: commandPathSearch, Title: "Create session from path", Key: "<c-t>", Description: "Open filesystem path search, then create or switch to a session for the selected path."},
 		{ID: commandToggleHidden, Title: "Toggle hidden configured paths", Key: "<meta-h>", Description: "Toggle whether hidden directories are skipped for configured repos and subdirs."},
 		{ID: commandToggleIgnored, Title: "Toggle gitignored configured paths", Key: "<meta-i>", Description: "Toggle whether gitignored directories are skipped for configured repos and subdirs."},
@@ -3137,8 +3206,7 @@ func (m Model) runCommand(item commandItem) (tea.Model, tea.Cmd) {
 	case commandRenameSession:
 		return m.openRenameSession()
 	case commandNewSession:
-		m.mode = modeCreateSession
-		m.createText = ""
+		m.openCreateSession()
 	case commandPathSearch:
 		return m.openPathSearch()
 	case commandCycleRoot:
@@ -3354,7 +3422,7 @@ func renderConfirmAction(label string, key string, selected bool, s styles) stri
 }
 
 func renderCreateSession(s styles, value string, appWidth int) string {
-	return renderNamePrompt(s, "Create Session", "Create a path session in the current path.", "create", value, appWidth)
+	return renderNamePrompt(s, "Create Named Session", "Create a tmux session from the selected row.", "create", value, appWidth)
 }
 
 func renderRenameSession(s styles, value string, appWidth int) string {

@@ -44,7 +44,7 @@ tmux-parator --popup
   section.
 - `Ctrl-g` opens the fuzzy command palette.
 - `Ctrl-n` renames the selected open tmux session.
-- `Ctrl-s` creates a tmux session in the current path.
+- `Ctrl-s` creates a named tmux session from the selected row's path and kind.
 - `Ctrl-t` starts the create-session-from-path flow.
 - `Ctrl-r` reloads sessions and configured roots.
 - `Ctrl-k` asks to kill the selected session.

@@ -890,6 +890,113 @@ func TestRenameSessionCallsClient(t *testing.T) {
 	}
 }
 
+func TestCtrlSOpensCreateSessionPromptPrefilledWithSelectedSession(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.sessions = []tmux.Session{{Name: "main", CurrentPath: "/tmp/main"}, {Name: "other", CurrentPath: "/tmp/other"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlS})
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("ctrl-s returned command before create submit")
+	}
+	if model.mode != modeCreateSession {
+		t.Fatalf("mode = %v, want create session", model.mode)
+	}
+	if model.createText != "main" {
+		t.Fatalf("createText = %q, want selected session name", model.createText)
+	}
+	if model.createPath != "/tmp/main" || model.createMetadata.Kind != "manual" || model.createMetadata.Path != "/tmp/main" {
+		t.Fatalf("create target = %q/%#v, want selected session path/manual metadata", model.createPath, model.createMetadata)
+	}
+}
+
+func TestCreateSessionCommandPrefillsSelectedSession(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.sessions = []tmux.Session{{Name: "main", CurrentPath: "/tmp/main"}, {Name: "other", CurrentPath: "/tmp/other"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+	model.mode = modeCommands
+	model.commandPreviousMode = modeBrowse
+
+	item, ok := commandByID(model.commandItems(), commandNewSession)
+	if !ok {
+		t.Fatal("new session command missing")
+	}
+	updated, cmd := model.runCommand(item)
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("new session command returned command before submit")
+	}
+	if model.mode != modeCreateSession || model.createText != "main" {
+		t.Fatalf("mode/createText = %v/%q, want create/main", model.mode, model.createText)
+	}
+}
+
+func TestCreateNamedSessionFromOpenSessionCreatesSecondSessionInSamePath(t *testing.T) {
+	client := &fakeSessionClient{}
+	model := NewModel(client, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.sessions = []tmux.Session{{Name: "main", Metadata: tmux.SessionMetadata{Kind: "repo", Path: "/tmp/project", Root: "repos", Glyph: "R", GlyphColor: "#f00"}}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlS})
+	model = updated.(Model)
+	model.createText = "main-copy"
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+
+	if model.mode != modeBrowse || !model.loading {
+		t.Fatalf("mode/loading = %v/%v, want browse/loading", model.mode, model.loading)
+	}
+	if cmd == nil {
+		t.Fatal("create named session returned nil command")
+	}
+	if msg := cmd(); msg.(createdMsg).err != nil {
+		t.Fatalf("createdMsg err = %v", msg.(createdMsg).err)
+	}
+	if client.newSessionName != "main-copy" || client.newSessionPath != "/tmp/project" {
+		t.Fatalf("new session = %q/%q, want main-copy//tmp/project", client.newSessionName, client.newSessionPath)
+	}
+	if client.newSessionMetadata.Kind != "repo" || client.newSessionMetadata.Path != "/tmp/project" || client.newSessionMetadata.Root != "repos" || client.newSessionMetadata.BaseName != "main-copy" {
+		t.Fatalf("metadata = %#v, want copied repo metadata with new basename", client.newSessionMetadata)
+	}
+	if client.switchedSession != "" || client.taggedSession != "" {
+		t.Fatalf("create named session switched/tagged existing session: %#v", client)
+	}
+}
+
+func TestCreateNamedSessionFromAvailableWorkspaceKeepsWorkspaceKind(t *testing.T) {
+	client := &fakeSessionClient{}
+	model := NewModel(client, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.rootItems = []discovery.Candidate{{Name: "api", Path: "/tmp/repos/api", RootName: "repos", Mode: "repo", Glyph: "R", GlyphColor: "#f00"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlS})
+	model = updated.(Model)
+	if model.mode != modeCreateSession || model.createText != "api" {
+		t.Fatalf("mode/createText = %v/%q, want create/api", model.mode, model.createText)
+	}
+	model.createText = "api-copy"
+	_, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("create named workspace session returned nil command")
+	}
+	if msg := cmd(); msg.(createdMsg).err != nil {
+		t.Fatalf("createdMsg err = %v", msg.(createdMsg).err)
+	}
+	if client.newSessionName != "api-copy" || client.newSessionPath != "/tmp/repos/api" {
+		t.Fatalf("new session = %q/%q, want api-copy//tmp/repos/api", client.newSessionName, client.newSessionPath)
+	}
+	if client.newSessionMetadata.Kind != "repo" || client.newSessionMetadata.Root != "repos" || client.newSessionMetadata.BaseName != "api-copy" {
+		t.Fatalf("metadata = %#v, want repo metadata with new basename", client.newSessionMetadata)
+	}
+}
+
 func TestMainViewUsesStatusChipsInsteadOfPromptStatusLine(t *testing.T) {
 	model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true, SkipGitignored: false}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
 	model.width = 100
