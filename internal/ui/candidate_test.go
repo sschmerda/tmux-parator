@@ -840,6 +840,65 @@ func TestCtrlNOpensRenamePromptPrefilledWithSelectedSession(t *testing.T) {
 	}
 }
 
+func TestCtrlNOnAvailableWorkspaceShowsError(t *testing.T) {
+	client := &fakeSessionClient{}
+	model := NewModel(client, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.rootItems = []discovery.Candidate{{Name: "api", Path: "/tmp/api", Mode: "repo"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+	model.width = 96
+	model.height = 24
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlN})
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("ctrl-n on workspace returned command")
+	}
+	if model.mode != modeBrowse || model.err == nil || !strings.Contains(model.err.Error(), "not an open tmux session") {
+		t.Fatalf("mode/err = %v/%v, want browse error", model.mode, model.err)
+	}
+	view := ansi.Strip(model.View())
+	if !strings.Contains(view, "Error") || !strings.Contains(view, "not an open tmux session") || !strings.Contains(view, "<esc> dismiss") {
+		t.Fatalf("workspace rename error missing:\n%s", view)
+	}
+
+	updated, cmd = model.updateKey(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("esc while rename error visible returned command")
+	}
+	if model.err != nil {
+		t.Fatalf("err = %v, want dismissed", model.err)
+	}
+	if client.newSessionName != "" || client.switchedSession != "" {
+		t.Fatalf("client used after rename error dismiss: %#v", client)
+	}
+}
+
+func TestRenameCommandOnAvailableWorkspaceShowsError(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.rootItems = []discovery.Candidate{{Name: "api", Path: "/tmp/api", Mode: "repo"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+	model.mode = modeCommands
+	model.commandPreviousMode = modeBrowse
+
+	item, ok := commandByID(model.commandItems(), commandRenameSession)
+	if !ok {
+		t.Fatal("rename command missing")
+	}
+	updated, cmd := model.runCommand(item)
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("rename command on workspace returned command")
+	}
+	if model.mode != modeBrowse || model.err == nil || !strings.Contains(model.err.Error(), "not an open tmux session") {
+		t.Fatalf("mode/err = %v/%v, want browse error", model.mode, model.err)
+	}
+}
+
 func TestRenameSessionRejectsDuplicateName(t *testing.T) {
 	client := &fakeSessionClient{}
 	model := NewModel(client, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})

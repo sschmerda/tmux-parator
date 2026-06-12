@@ -1589,6 +1589,7 @@ func (m Model) confirmKill() (tea.Model, tea.Cmd) {
 func (m Model) openRenameSession() (tea.Model, tea.Cmd) {
 	selected, ok := m.selected()
 	if !ok || selected.kind != candidateSession {
+		m.err = fmt.Errorf("selected item is not an open tmux session")
 		return m, nil
 	}
 	m.mode = modeRenameSession
@@ -3259,6 +3260,11 @@ func (m Model) notifyCommandUnavailable(item commandItem) Model {
 	reason := strings.TrimSpace(item.DisabledReason)
 	if reason == "" {
 		reason = "Command is not available in the current context."
+	}
+	if item.ID == commandRenameSession {
+		m.mode = modeBrowse
+		m.err = fmt.Errorf("%s: %s", item.Title, reason)
+		return m
 	}
 	if m.commandPreviousMode == modePathSearch {
 		m.mode = modePathSearch
