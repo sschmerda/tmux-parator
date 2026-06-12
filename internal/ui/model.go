@@ -2211,8 +2211,8 @@ func renderCandidate(item candidate, selected bool, s styles, glyphs config.Glyp
 		textStyle = s.selected
 		detailStyle = s.selected
 		highlightStyle = s.selectedMatch
-		chipStyle = s.selectedChip.Background(s.selected.GetBackground())
-		chipGlyphBackground = chipStyle.GetBackground()
+		chipStyle = s.selected
+		chipGlyphBackground = s.selected.GetBackground()
 	}
 	glyphStyle := lipgloss.NewStyle().
 		Foreground(candidateGlyphColor(item, selected, glyphColors)).
