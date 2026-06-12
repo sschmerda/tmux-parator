@@ -385,7 +385,7 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.mode == modeHelp {
 		switch msg.String() {
-		case "esc", "?":
+		case "esc", "ctrl+_":
 			m.mode = m.previousMode
 		case "up", "k":
 			if m.helpCursor > 0 {
@@ -456,7 +456,7 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.openCommands(m.mode)
 	case "ctrl+@":
 		return m, m.switchLastSession()
-	case "?":
+	case "ctrl+_":
 		m.openHelp(m.mode)
 	case "ctrl+r":
 		m.loading = true
@@ -517,7 +517,7 @@ func (m Model) updateCommandKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "ctrl+g":
 		m.mode = m.commandPreviousMode
-	case "?":
+	case "ctrl+_":
 		m.openHelp(m.mode)
 	case "up":
 		if m.commandCursor > 0 {
@@ -603,7 +603,7 @@ func (m Model) updatePathSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.stopPathStream()
 		m.mode = modeBrowse
 		return m, m.switchLastSession()
-	case "?":
+	case "ctrl+_":
 		m.openHelp(modePathSearch)
 		return m, nil
 	case "ctrl+r":
@@ -2950,7 +2950,7 @@ func pathSearchCommandSpecs() []commandSpec {
 		{ID: commandToggleHidden, Title: "Toggle hidden path results", Key: "<meta-h>", Description: "Toggle whether hidden directories are skipped in the current path search."},
 		{ID: commandToggleIgnored, Title: "Toggle gitignored path results", Key: "<meta-i>", Description: "Toggle whether gitignored directories are skipped in the current path search."},
 		{ID: commandReload, Title: "Reload path search", Key: "<c-r>", Description: "Restart the current streamed path search."},
-		{ID: commandHelp, Title: "Show help", Key: "?", Description: "Show help for the command palette."},
+		{ID: commandHelp, Title: "Show help", Key: "<c-?>", Description: "Show help for the command palette."},
 		{ID: commandQuit, Title: "Quit", Key: "<esc>", Description: "Quit tmux-parator."},
 	}
 }
@@ -2965,7 +2965,7 @@ func browseCommandSpecs() []commandSpec {
 		{ID: commandToggleHidden, Title: "Toggle hidden configured paths", Key: "<meta-h>", Description: "Toggle whether hidden directories are skipped for configured repos and subdirs."},
 		{ID: commandToggleIgnored, Title: "Toggle gitignored configured paths", Key: "<meta-i>", Description: "Toggle whether gitignored directories are skipped for configured repos and subdirs."},
 		{ID: commandReload, Title: "Reload", Key: "<c-r>", Description: "Reload tmux sessions and configured root candidates."},
-		{ID: commandHelp, Title: "Show help", Key: "?", Description: "Show help for the command palette."},
+		{ID: commandHelp, Title: "Show help", Key: "<c-?>", Description: "Show help for the command palette."},
 		{ID: commandQuit, Title: "Quit", Key: "<esc>", Description: "Quit tmux-parator."},
 	}
 }
@@ -3740,7 +3740,7 @@ func helpItemsForMode(previous mode) []helpItem {
 			{Key: "<enter>", Action: "run selected command", Description: "Run the selected command when it is available in the current context."},
 			{Key: "<c-g>", Action: "close palette", Description: "Close the command palette and return to the previous mode."},
 			{Key: "<esc>", Action: "close palette/help", Description: "Close help, then close the command palette when pressed again."},
-			{Key: "?", Action: "toggle help", Description: "Show or close this help popup."},
+			{Key: "<c-?>", Action: "toggle help", Description: "Show or close this help popup."},
 			{Key: "Quit command", Action: specs[9].Title, Description: specs[9].Description},
 		}
 	}

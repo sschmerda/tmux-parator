@@ -1217,7 +1217,7 @@ func TestPathSearchHelpReturnsToPathSearch(t *testing.T) {
 	model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
 	model.mode = modePathSearch
 
-	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlUnderscore})
 	model = updated.(Model)
 	if model.mode != modeHelp || model.previousMode != modePathSearch {
 		t.Fatalf("mode/previous = %v/%v, want help/path search", model.mode, model.previousMode)
@@ -1227,6 +1227,26 @@ func TestPathSearchHelpReturnsToPathSearch(t *testing.T) {
 	model = updated.(Model)
 	if model.mode != modePathSearch {
 		t.Fatalf("mode = %v, want path search", model.mode)
+	}
+}
+
+func TestPathSearchQuestionMarkIsTypedIntoPrompt(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.mode = modePathSearch
+	model.pathInput = "/tmp/name"
+	model.pathRoot = "/tmp"
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("question mark returned command")
+	}
+	if model.mode != modePathSearch {
+		t.Fatalf("mode = %v, want path search", model.mode)
+	}
+	if model.pathInput != "/tmp/name?" {
+		t.Fatalf("pathInput = %q, want question mark appended", model.pathInput)
 	}
 }
 
