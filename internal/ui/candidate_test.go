@@ -1286,6 +1286,46 @@ func TestTypedPathCandidateRequiresDirectory(t *testing.T) {
 	}
 }
 
+func TestOpenTypedPathMissingShowsNoticeAndDoesNotOpen(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "missing")
+	client := &fakeSessionClient{}
+	model := NewModel(client, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.mode = modePathSearch
+	model.pathInput = target
+	model.pathResult = []candidate{{kind: candidatePath, fsPath: pathsearch.Candidate{Name: "other", Path: root}}}
+	model.width = 96
+	model.height = 24
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlP})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("ctrl-p on missing typed path returned command")
+	}
+	if model.mode != modePathSearch || model.pathErr == nil || !strings.Contains(model.pathErr.Error(), "not an available directory") {
+		t.Fatalf("mode/pathErr = %v/%v, want path search unavailable directory", model.mode, model.pathErr)
+	}
+	if model.pathNotice == nil || !strings.Contains(model.pathNotice.Error(), "not an available directory") {
+		t.Fatalf("pathNotice = %v, want unavailable directory notice", model.pathNotice)
+	}
+	view := ansi.Strip(model.View())
+	if !strings.Contains(view, "Notice") || !strings.Contains(view, "not an available directory") || !strings.Contains(view, "<enter>/<esc> dismiss") {
+		t.Fatalf("missing typed path notice missing:\n%s", view)
+	}
+
+	updated, cmd = model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("enter while open-typed notice visible returned command")
+	}
+	if model.pathNotice != nil {
+		t.Fatalf("pathNotice = %v, want dismissed", model.pathNotice)
+	}
+	if client.newSessionName != "" || client.switchedSession != "" {
+		t.Fatalf("client used after open-typed notice enter: %#v", client)
+	}
+}
+
 func TestPathSearchCtrlAOpensCreatePathConfirmationForMissingPath(t *testing.T) {
 	root := t.TempDir()
 	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})

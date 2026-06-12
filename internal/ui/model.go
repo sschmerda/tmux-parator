@@ -627,6 +627,7 @@ func (m Model) updatePathSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		selected, ok := m.typedPathCandidate()
 		if !ok {
 			m.pathErr = errPathInputUnavailable(m.pathInput)
+			m.pathNotice = m.pathErr
 			return m, nil
 		}
 		m.loading = true
