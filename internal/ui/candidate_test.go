@@ -3,6 +3,8 @@ package ui
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -638,10 +640,36 @@ func TestCommandPaletteIncludesToggleAndQuitCommands(t *testing.T) {
 
 	model.openCommands(modePathSearch)
 	titles = commandTitles(model.commandItems())
-	for _, want := range []string{"Show hidden path results", "Show gitignored path results", "Quit"} {
+	for _, want := range []string{"Add typed path", "Show hidden path results", "Show gitignored path results", "Quit"} {
 		if !titles[want] {
 			t.Fatalf("command %q missing from path palette: %#v", want, titles)
 		}
+	}
+}
+
+func TestPathCommandPaletteCreateTypedPathEnabledOnlyForMissingPath(t *testing.T) {
+	root := t.TempDir()
+	missing := filepath.Join(root, "missing")
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.mode = modePathSearch
+	model.pathInput = missing
+	model.openCommands(modePathSearch)
+
+	item, ok := commandByID(model.commandItems(), commandCreateTyped)
+	if !ok {
+		t.Fatal("create typed path command missing")
+	}
+	if item.Title != "Add typed path" || item.Key != "<c-a>" || !item.Enabled {
+		t.Fatalf("create typed command = %#v, want title/key/enabled", item)
+	}
+
+	model.pathInput = root
+	item, ok = commandByID(model.commandItems(), commandCreateTyped)
+	if !ok {
+		t.Fatal("create typed path command missing after existing path")
+	}
+	if item.Enabled || !strings.Contains(item.DisabledReason, "already exists") {
+		t.Fatalf("existing path command = %#v, want disabled already exists", item)
 	}
 }
 
@@ -1163,7 +1191,7 @@ func TestPathSearchHelpRendersModeSpecificContent(t *testing.T) {
 	model.height = 24
 
 	view := model.View()
-	if !strings.Contains(view, "Path Search") || !strings.Contains(view, "<c-p>") {
+	if !strings.Contains(view, "Path Search") || !strings.Contains(view, "<c-p>") || !strings.Contains(view, "<c-a>") {
 		t.Fatalf("path search help missing expected content:\n%s", view)
 	}
 	if strings.HasPrefix(view, "Path Search") {
@@ -1255,6 +1283,249 @@ func TestTypedPathCandidateRequiresDirectory(t *testing.T) {
 	}
 	if candidate.path() != dir {
 		t.Fatalf("candidate path = %q, want %q", candidate.path(), dir)
+	}
+}
+
+func TestPathSearchCtrlAOpensCreatePathConfirmationForMissingPath(t *testing.T) {
+	root := t.TempDir()
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.mode = modePathSearch
+	model.pathInput = filepath.Join(root, "missing")
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlA})
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("ctrl-a returned command before confirmation")
+	}
+	if model.mode != modeConfirmCreatePath || model.confirmChoice != confirmCancel {
+		t.Fatalf("mode/choice = %v/%v, want confirm-create/cancel", model.mode, model.confirmChoice)
+	}
+}
+
+func TestPathSearchEnterWithoutSelectionDoesNotCreateTypedPath(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "missing")
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.mode = modePathSearch
+	model.pathInput = target
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("enter without selection returned command")
+	}
+	if model.mode != modePathSearch {
+		t.Fatalf("mode = %v, want path search", model.mode)
+	}
+}
+
+func TestCreateTypedPathConfirmationCancelDoesNotCreate(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "missing")
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.mode = modeConfirmCreatePath
+	model.createPathInput = target
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("cancel returned command")
+	}
+	if model.mode != modePathSearch {
+		t.Fatalf("mode = %v, want path search", model.mode)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("target stat err = %v, want not exist", err)
+	}
+}
+
+func TestCreateTypedPathConfirmationYesCreatesDirectoryAndSession(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "missing")
+	client := &fakeSessionClient{}
+	model := NewModel(client, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.mode = modeConfirmCreatePath
+	model.createPathInput = target
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	model = updated.(Model)
+
+	if model.mode != modeBrowse || !model.loading {
+		t.Fatalf("mode/loading = %v/%v, want browse/loading", model.mode, model.loading)
+	}
+	if info, err := os.Stat(target); err != nil || !info.IsDir() {
+		t.Fatalf("created path stat = (%v, %v), want directory", info, err)
+	}
+	if cmd == nil {
+		t.Fatal("confirm create returned nil command")
+	}
+	msg := cmd()
+	if created, ok := msg.(createdMsg); !ok || created.err != nil {
+		t.Fatalf("cmd msg = %#v, want successful createdMsg", msg)
+	}
+	if client.newSessionPath != target || client.newSessionMetadata.Kind != "path" || client.newSessionMetadata.Path != target {
+		t.Fatalf("new session path/metadata = %q/%#v, want path metadata", client.newSessionPath, client.newSessionMetadata)
+	}
+}
+
+func TestCreateTypedPathExistingDirectoryWarnsAndDoesNotOpen(t *testing.T) {
+	root := t.TempDir()
+	client := &fakeSessionClient{}
+	model := NewModel(client, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.mode = modePathSearch
+	model.pathInput = root
+	model.pathResult = []candidate{{kind: candidatePath, fsPath: pathsearch.Candidate{Name: filepath.Base(root), Path: root}}}
+	model.sessions = []tmux.Session{{Name: "existing", Metadata: tmux.SessionMetadata{Path: root}}}
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlA})
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("existing directory returned command")
+	}
+	if model.mode != modePathSearch || model.pathErr == nil || !strings.Contains(model.pathErr.Error(), "already exists") {
+		t.Fatalf("mode/pathErr = %v/%v, want path search already exists warning", model.mode, model.pathErr)
+	}
+	if model.pathNotice == nil || !strings.Contains(model.pathNotice.Error(), "already exists") {
+		t.Fatalf("pathNotice = %v, want already exists notice", model.pathNotice)
+	}
+	if client.newSessionName != "" || client.switchedSession != "" {
+		t.Fatalf("client used for existing directory: %#v", client)
+	}
+	model.width = 96
+	model.height = 24
+	view := ansi.Strip(model.View())
+	if !strings.Contains(view, "Notice") || !strings.Contains(view, "already exists") || !strings.Contains(view, "<enter>/<esc> dismiss") {
+		t.Fatalf("existing directory notice missing:\n%s", view)
+	}
+
+	updated, cmd = model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("enter while notice is visible returned command")
+	}
+	if model.pathNotice != nil {
+		t.Fatalf("pathNotice = %v, want dismissed", model.pathNotice)
+	}
+	if client.taggedSession != "" || client.switchedSession != "" || client.newSessionName != "" {
+		t.Fatalf("client used after notice enter: %#v", client)
+	}
+}
+
+func TestCreateTypedPathExistingFileWarnsAndDoesNotOverwrite(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "file")
+	if err := os.WriteFile(target, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.mode = modePathSearch
+	model.pathInput = target
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlA})
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("existing file returned command")
+	}
+	content, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "keep" {
+		t.Fatalf("file content = %q, want keep", content)
+	}
+	if model.pathErr == nil || !strings.Contains(model.pathErr.Error(), "not a directory") {
+		t.Fatalf("pathErr = %v, want not a directory warning", model.pathErr)
+	}
+	if model.pathNotice == nil || !strings.Contains(model.pathNotice.Error(), "not a directory") {
+		t.Fatalf("pathNotice = %v, want not a directory notice", model.pathNotice)
+	}
+	model.width = 96
+	model.height = 24
+	view := ansi.Strip(model.View())
+	if !strings.Contains(view, "Notice") || !strings.Contains(view, "not a directory") {
+		t.Fatalf("existing file notice missing:\n%s", view)
+	}
+}
+
+func TestCreateTypedPathNoticeDismissesWithEsc(t *testing.T) {
+	root := t.TempDir()
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.mode = modePathSearch
+	model.pathInput = root
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlA})
+	model = updated.(Model)
+	if model.pathNotice == nil {
+		t.Fatal("pathNotice = nil, want notice")
+	}
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("dismiss returned command")
+	}
+	if model.mode != modePathSearch || model.pathNotice != nil {
+		t.Fatalf("mode/pathNotice = %v/%v, want path search/no notice", model.mode, model.pathNotice)
+	}
+	if model.pathErr == nil {
+		t.Fatal("pathErr = nil, want footer warning retained after notice dismissal")
+	}
+}
+
+func TestCreateTypedPathNestedCreatesParents(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "one", "two", "three")
+	client := &fakeSessionClient{}
+	model := NewModel(client, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.mode = modeConfirmCreatePath
+	model.createPathInput = target
+
+	_, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if cmd == nil {
+		t.Fatal("confirm create returned nil command")
+	}
+	if _, ok := cmd().(createdMsg); !ok {
+		t.Fatal("command did not return createdMsg")
+	}
+	if info, err := os.Stat(target); err != nil || !info.IsDir() {
+		t.Fatalf("nested path stat = (%v, %v), want directory", info, err)
+	}
+	if client.newSessionPath != target {
+		t.Fatalf("newSessionPath = %q, want %q", client.newSessionPath, target)
+	}
+}
+
+func TestCreateTypedPathParentFileReportsError(t *testing.T) {
+	root := t.TempDir()
+	blocker := filepath.Join(root, "file")
+	if err := os.WriteFile(blocker, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(blocker, "child")
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.mode = modeConfirmCreatePath
+	model.createPathInput = target
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("blocked parent returned command")
+	}
+	if model.mode != modePathSearch || model.pathErr == nil || !strings.Contains(model.pathErr.Error(), "not a directory") {
+		t.Fatalf("mode/pathErr = %v/%v, want path search not a directory error", model.mode, model.pathErr)
+	}
+	content, err := os.ReadFile(blocker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "keep" {
+		t.Fatalf("blocker content = %q, want keep", content)
 	}
 }
 

@@ -2,12 +2,14 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -38,6 +40,7 @@ const (
 	modeHelp
 	modeCreateSession
 	modePathSearch
+	modeConfirmCreatePath
 )
 
 type confirmChoice int
@@ -66,6 +69,7 @@ type Model struct {
 	commandInput         string
 	pathInput            string
 	pathRoot             string
+	createPathInput      string
 	createText           string
 	cursor               int
 	scroll               int
@@ -90,6 +94,7 @@ type Model struct {
 	err                  error
 	rootErr              error
 	pathErr              error
+	pathNotice           error
 	mode                 mode
 	previousMode         mode
 	commandPreviousMode  mode
@@ -369,6 +374,12 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
+	if m.showsPathSearchBase() && m.pathNotice != nil {
+		if msg.String() == "enter" {
+			m.pathNotice = nil
+		}
+		return m, nil
+	}
 	if m.mode == modeCommands {
 		return m.updateCommandKey(msg)
 	}
@@ -391,6 +402,28 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.mode == modeCreateSession {
 		return m.updateCreateKey(msg)
+	}
+	if m.mode == modeConfirmCreatePath {
+		switch msg.String() {
+		case "y", "Y":
+			return m.confirmCreateTypedPath()
+		case "n", "N", "esc":
+			m.mode = modePathSearch
+			m.confirmChoice = confirmCancel
+			return m, nil
+		case "left", "up", "shift+tab":
+			m.confirmChoice = confirmCancel
+		case "right", "down", "tab":
+			m.confirmChoice = confirmYes
+		case "enter":
+			if m.confirmChoice == confirmYes {
+				return m.confirmCreateTypedPath()
+			}
+			m.mode = modePathSearch
+			m.confirmChoice = confirmCancel
+			return m, nil
+		}
+		return m, nil
 	}
 	if m.mode == modePathSearch {
 		return m.updatePathSearchKey(msg)
@@ -600,6 +633,8 @@ func (m Model) updatePathSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.stopPathStream()
 		m.mode = modeBrowse
 		return m, m.openCandidate(selected)
+	case "ctrl+a":
+		return m.openCreateTypedPathConfirmation()
 	case "tab":
 		if m.hasPathCompletionCycle() {
 			m.advancePathCompletion(1)
@@ -813,6 +848,9 @@ func (m Model) renderWithOverlay(content string) string {
 	if m.mode == modeConfirmKill {
 		base = placeCenteredOverlay(base, renderConfirmKill(m.styles, m.confirmKillSessionName(), m.confirmChoice, innerWidth), innerWidth, innerHeight)
 	}
+	if m.mode == modeConfirmCreatePath {
+		base = placeCenteredOverlay(base, renderConfirmCreatePath(m.styles, m.createPathInput, m.confirmChoice, innerWidth), innerWidth, innerHeight)
+	}
 	if m.mode == modeCreateSession {
 		base = placeCenteredOverlay(base, renderCreateSession(m.styles, m.createText, innerWidth), innerWidth, innerHeight)
 	}
@@ -821,6 +859,9 @@ func (m Model) renderWithOverlay(content string) string {
 	}
 	if m.mode == modeHelp {
 		base = placeOverlay(base, renderHelpPanel(m.styles, m.previousMode, m.helpCursor, m.helpScroll, innerWidth, innerHeight), innerWidth, innerHeight)
+	}
+	if m.showsPathSearchBase() && m.pathNotice != nil {
+		base = placeCenteredOverlay(base, renderPathNoticePopup(m.styles, m.pathNotice.Error(), innerWidth), innerWidth, innerHeight)
 	}
 	if message, ok := m.errorMessage(); ok {
 		base = placeCenteredOverlay(base, renderErrorPopup(m.styles, message, innerWidth), innerWidth, innerHeight)
@@ -1056,6 +1097,7 @@ func (m *Model) applyPathFilter() {
 func (m *Model) applyPathInputChange() tea.Cmd {
 	root, _ := parsePathInput(m.pathInput, m.defaultPathRoot())
 	m.pathErr = nil
+	m.pathNotice = nil
 	if root != m.pathRoot {
 		m.pathRoot = root
 		m.pathCursor = 0
@@ -1157,11 +1199,30 @@ func (m Model) typedPathCandidate() (candidate, bool) {
 	return candidate{kind: candidatePath, fsPath: pathsearch.Candidate{Name: filepath.Base(expanded), Path: expanded}}, true
 }
 
+func (m Model) missingTypedPathCandidate() (candidate, bool, error) {
+	return typedMissingPathCandidate(m.pathInput)
+}
+
 func errPathInputUnavailable(input string) error {
 	if strings.TrimSpace(input) == "" {
 		return fmt.Errorf("typed path is empty")
 	}
 	return fmt.Errorf("typed path is not an available directory: %s", input)
+}
+
+func errPathCreateUnavailable(input string) error {
+	if strings.TrimSpace(input) == "" {
+		return fmt.Errorf("typed path is empty")
+	}
+	return fmt.Errorf("typed path cannot be created: %s", input)
+}
+
+func errPathAlreadyExists(input string) error {
+	return fmt.Errorf("typed path already exists: %s", input)
+}
+
+func errPathAlreadyExistsAsFile(input string) error {
+	return fmt.Errorf("typed path already exists and is not a directory: %s", input)
 }
 
 func sortPathMatches(matches []fuzzy.Match, root string, query string) {
@@ -1452,6 +1513,69 @@ func (m Model) confirmKill() (tea.Model, tea.Cmd) {
 	return m, m.killSession(selected.session.Name)
 }
 
+func (m Model) openCreateTypedPathConfirmation() (tea.Model, tea.Cmd) {
+	if _, ok, err := m.missingTypedPathCandidate(); !ok {
+		m.pathErr = err
+		m.pathNotice = err
+		return m, nil
+	}
+	m.mode = modeConfirmCreatePath
+	m.createPathInput = strings.TrimSpace(m.pathInput)
+	m.confirmChoice = confirmCancel
+	return m, nil
+}
+
+func (m Model) confirmCreateTypedPath() (tea.Model, tea.Cmd) {
+	pathInput := strings.TrimSpace(m.createPathInput)
+	if pathInput == "" {
+		pathInput = strings.TrimSpace(m.pathInput)
+	}
+	candidate, ok, err := typedMissingPathCandidate(pathInput)
+	if !ok {
+		m.mode = modePathSearch
+		m.confirmChoice = confirmCancel
+		m.pathErr = err
+		m.pathNotice = err
+		return m, nil
+	}
+	if err := os.MkdirAll(candidate.path(), 0o755); err != nil {
+		m.mode = modePathSearch
+		m.confirmChoice = confirmCancel
+		m.pathErr = fmt.Errorf("create typed path %s: %w", pathInput, err)
+		m.pathNotice = m.pathErr
+		return m, nil
+	}
+	m.loading = true
+	m.confirmChoice = confirmCancel
+	m.stopPathStream()
+	m.mode = modeBrowse
+	return m, m.openCandidate(candidate)
+}
+
+func typedMissingPathCandidate(pathInput string) (candidate, bool, error) {
+	pathInput = strings.TrimSpace(pathInput)
+	if pathInput == "" {
+		return candidate{}, false, errPathCreateUnavailable(pathInput)
+	}
+	expanded, err := pathsearch.ExpandRoot(pathInput)
+	if err != nil {
+		return candidate{}, false, err
+	}
+	info, err := os.Stat(expanded)
+	if err == nil {
+		if info.IsDir() {
+			return candidate{}, false, errPathAlreadyExists(pathInput)
+		}
+		return candidate{}, false, errPathAlreadyExistsAsFile(pathInput)
+	}
+	if !os.IsNotExist(err) {
+		if !errors.Is(err, syscall.ENOTDIR) {
+			return candidate{}, false, err
+		}
+	}
+	return candidate{kind: candidatePath, fsPath: pathsearch.Candidate{Name: filepath.Base(expanded), Path: expanded}}, true, nil
+}
+
 func (m Model) errorMessage() (string, bool) {
 	if m.err != nil {
 		return m.err.Error(), true
@@ -1463,6 +1587,10 @@ func (m Model) errorMessage() (string, bool) {
 }
 
 func (m *Model) clearVisibleError() bool {
+	if m.showsPathSearchBase() && m.pathNotice != nil {
+		m.pathNotice = nil
+		return true
+	}
 	if m.showsPathSearchBase() && m.pathErr != nil {
 		m.pathErr = nil
 		return true
@@ -1580,6 +1708,9 @@ func (m Model) showsPathSearchBase() bool {
 		return true
 	}
 	if m.mode == modeCommands && m.commandPreviousMode == modePathSearch {
+		return true
+	}
+	if m.mode == modeConfirmCreatePath {
 		return true
 	}
 	return m.mode == modeHelp && ((m.previousMode == modePathSearch) || (m.previousMode == modeCommands && m.commandPreviousMode == modePathSearch))
@@ -1761,6 +1892,7 @@ func (m Model) openPathSearch() (tea.Model, tea.Cmd) {
 	if !m.pathConfig.enabled {
 		m.err = nil
 		m.pathErr = nil
+		m.pathNotice = nil
 		return m, nil
 	}
 	root := "~"
@@ -1775,6 +1907,7 @@ func (m Model) openPathSearch() (tea.Model, tea.Cmd) {
 	m.pathCursor = 0
 	m.pathScroll = 0
 	m.pathErr = nil
+	m.pathNotice = nil
 	m.pathBusy = true
 	m.clearPathCompletion()
 	return m, m.startPathStream(root)
@@ -1791,6 +1924,7 @@ func (m *Model) startPathStream(root string) tea.Cmd {
 	m.pathCursor = 0
 	m.pathScroll = 0
 	m.pathErr = nil
+	m.pathNotice = nil
 	m.pathBusy = true
 	m.clearPathCompletion()
 	return m.waitPathBatch(root, stream)
@@ -1807,6 +1941,7 @@ func (m *Model) startPathStreamPreserveCompletion(root string) tea.Cmd {
 	m.pathCursor = 0
 	m.pathScroll = 0
 	m.pathErr = nil
+	m.pathNotice = nil
 	m.pathBusy = true
 	return m.waitPathBatch(root, stream)
 }
@@ -2695,6 +2830,7 @@ const (
 	commandOpenSelected  commandID = "open-selected"
 	commandOpenLast      commandID = "open-last-session"
 	commandOpenTyped     commandID = "open-typed"
+	commandCreateTyped   commandID = "create-typed-path"
 	commandKillSession   commandID = "kill-session"
 	commandNewSession    commandID = "new-session"
 	commandPathSearch    commandID = "path-search"
@@ -2739,9 +2875,14 @@ func (m Model) commandItems() []commandItem {
 		if _, ok := m.typedPathCandidate(); !ok {
 			typedReason = "The typed prompt is not an existing directory."
 		}
+		createReason := ""
+		if _, ok, err := m.missingTypedPathCandidate(); !ok {
+			createReason = err.Error()
+		}
 		return []commandItem{
 			{ID: commandOpenSelected, Title: "Open selected result", Key: "<enter>", Description: "Create or switch to a tmux session for the selected fuzzy path result.", Enabled: len(m.pathResult) > 0, DisabledReason: "There is no selected path result."},
 			{ID: commandOpenTyped, Title: "Open typed path", Key: "<c-p>", Description: "Open the exact typed prompt path when it exists as a directory.", Enabled: typedReason == "", DisabledReason: typedReason},
+			{ID: commandCreateTyped, Title: "Add typed path", Key: "<c-a>", Description: "Create the exact typed prompt path after confirmation, then create or switch to its tmux session.", Enabled: createReason == "", DisabledReason: createReason},
 			{ID: commandCycleRoot, Title: "Cycle prompt root", Key: "<c-o>", Description: "Cycle the path prompt through ~/ / ./ ../.", Enabled: true},
 			{ID: commandToggleHidden, Title: pathToggleHiddenTitle(m.pathConfig.options.SkipHidden), Key: "<meta-h>", Description: "Toggle whether hidden directories are skipped in the current path search.", Enabled: true},
 			{ID: commandToggleIgnored, Title: pathToggleIgnoredTitle(m.pathConfig.options.SkipGitignored), Key: "<meta-i>", Description: "Toggle whether gitignored directories are skipped in the current path search.", Enabled: true},
@@ -2858,6 +2999,8 @@ func (m Model) runCommand(item commandItem) (tea.Model, tea.Cmd) {
 		m.stopPathStream()
 		m.mode = modeBrowse
 		return m, m.openCandidate(selected)
+	case commandCreateTyped:
+		return m.openCreateTypedPathConfirmation()
 	case commandKillSession:
 		m.mode = modeConfirmKill
 		m.confirmChoice = confirmCancel
@@ -2920,6 +3063,7 @@ func (m Model) notifyCommandUnavailable(item commandItem) Model {
 	if m.commandPreviousMode == modePathSearch {
 		m.mode = modePathSearch
 		m.pathErr = fmt.Errorf("%s: %s", item.Title, reason)
+		m.pathNotice = m.pathErr
 		return m
 	}
 	m.mode = modeBrowse
@@ -3043,6 +3187,28 @@ func renderConfirmKill(s styles, sessionName string, choice confirmChoice, appWi
 	return renderCenteredTitledBox("Confirm", "", strings.Join(lines, "\n"), width, len(lines)+4, 3, s)
 }
 
+func renderConfirmCreatePath(s styles, pathInput string, choice confirmChoice, appWidth int) string {
+	width := helpPanelWidth(appWidth)
+	if width > 72 {
+		width = 72
+	}
+	if width < 42 {
+		width = 42
+	}
+	bodyWidth := width - 8
+	if bodyWidth < 20 {
+		bodyWidth = 20
+	}
+	if strings.TrimSpace(pathInput) == "" {
+		pathInput = "typed path"
+	}
+	message := "Create directory " + strconv.Quote(pathInput) + "?"
+	lines := wrapHelpDescription(message, bodyWidth)
+	lines = append(lines, "")
+	lines = append(lines, renderConfirmAction("Cancel", "n/<esc>", choice == confirmCancel, s)+s.popupBody.Render("   ")+renderConfirmAction("Create", "y", choice == confirmYes, s))
+	return renderCenteredTitledBox("Confirm", "", strings.Join(lines, "\n"), width, len(lines)+4, 3, s)
+}
+
 func renderConfirmAction(label string, key string, selected bool, s styles) string {
 	prefix := "  "
 	if selected {
@@ -3093,6 +3259,24 @@ func renderErrorPopup(s styles, message string, appWidth int) string {
 	lines = append(lines, "")
 	lines = append(lines, s.popupAccent.Render("<esc>")+s.popupMuted.Render(" dismiss")+s.popupBody.Render("   ")+s.popupAccent.Render("<c-r>")+s.popupMuted.Render(" retry/reload"))
 	return renderCenteredTitledBox("Error", "", strings.Join(lines, "\n"), width, len(lines)+4, 3, s)
+}
+
+func renderPathNoticePopup(s styles, message string, appWidth int) string {
+	width := helpPanelWidth(appWidth)
+	if width > 96 {
+		width = 96
+	}
+	if width < 46 {
+		width = 46
+	}
+	bodyWidth := width - 8
+	if bodyWidth < 20 {
+		bodyWidth = 20
+	}
+	lines := wrapHelpDescription(message, bodyWidth)
+	lines = append(lines, "")
+	lines = append(lines, s.popupAccent.Render("<enter>/<esc>")+s.popupMuted.Render(" dismiss"))
+	return renderCenteredTitledBox("Notice", "", strings.Join(lines, "\n"), width, len(lines)+4, 3, s)
 }
 
 func renderHelpPanel(s styles, previous mode, cursor int, scroll int, appWidth int, appHeight int) string {
@@ -3505,6 +3689,7 @@ func helpItemsForMode(previous mode) []helpItem {
 			{Key: "<left>/<right>", Action: "accept completion cycle", Description: "Clear the current completion cycle so the next Tab completes the next path level."},
 			{Key: "<enter>", Action: "open selected result", Description: "Create or switch to a tmux session for the selected fuzzy result."},
 			{Key: "<c-p>", Action: "open typed path", Description: "Open the exact typed prompt path when it exists as a directory."},
+			{Key: "<c-a>", Action: "add typed path", Description: "Create the exact typed prompt path after confirmation, then create or switch to its tmux session."},
 			{Key: "<c-o>", Action: "cycle prompt root", Description: "Cycle the prompt through ~/ / ./ ../."},
 			{Key: "<c-`>", Action: "open last session", Description: "Switch to tmux's last active session."},
 			{Key: "<meta-h>", Action: "toggle hidden dirs", Description: "Toggle whether hidden directories are skipped in the current path search."},
