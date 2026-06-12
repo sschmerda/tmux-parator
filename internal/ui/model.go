@@ -2857,6 +2857,13 @@ type commandMatch struct {
 	titleIndexes []int
 }
 
+type commandSpec struct {
+	ID          commandID
+	Title       string
+	Key         string
+	Description string
+}
+
 func (item commandItem) fuzzyCandidate() fuzzy.Candidate {
 	return fuzzy.Candidate{
 		Title:    item.Title,
@@ -2872,6 +2879,7 @@ func (item commandItem) fuzzyCandidate() fuzzy.Candidate {
 
 func (m Model) commandItems() []commandItem {
 	if m.commandPreviousMode == modePathSearch {
+		specs := pathSearchCommandSpecs()
 		typedReason := ""
 		if _, ok := m.typedPathCandidate(); !ok {
 			typedReason = "The typed prompt is not an existing directory."
@@ -2881,17 +2889,18 @@ func (m Model) commandItems() []commandItem {
 			createReason = err.Error()
 		}
 		return []commandItem{
-			{ID: commandOpenSelected, Title: "Open selected result", Key: "<enter>", Description: "Create or switch to a tmux session for the selected fuzzy path result.", Enabled: len(m.pathResult) > 0, DisabledReason: "There is no selected path result."},
-			{ID: commandOpenTyped, Title: "Open typed path", Key: "<c-p>", Description: "Open the exact typed prompt path when it exists as a directory.", Enabled: typedReason == "", DisabledReason: typedReason},
-			{ID: commandCreateTyped, Title: "Add typed path", Key: "<c-a>", Description: "Create the exact typed prompt path after confirmation, then create or switch to its tmux session.", Enabled: createReason == "", DisabledReason: createReason},
-			{ID: commandCycleRoot, Title: "Cycle prompt root", Key: "<c-o>", Description: "Cycle the path prompt through ~/ / ./ ../.", Enabled: true},
-			{ID: commandToggleHidden, Title: pathToggleHiddenTitle(m.pathConfig.options.SkipHidden), Key: "<meta-h>", Description: "Toggle whether hidden directories are skipped in the current path search.", Enabled: true},
-			{ID: commandToggleIgnored, Title: pathToggleIgnoredTitle(m.pathConfig.options.SkipGitignored), Key: "<meta-i>", Description: "Toggle whether gitignored directories are skipped in the current path search.", Enabled: true},
-			{ID: commandReload, Title: "Reload path search", Key: "<c-r>", Description: "Restart the current streamed path search.", Enabled: true},
-			{ID: commandHelp, Title: "Show help", Key: "?", Description: "Show help for the command palette.", Enabled: true},
-			{ID: commandQuit, Title: "Quit", Key: "<esc>", Description: "Quit tmux-parator.", Enabled: true},
+			commandItemFromSpec(specs[0], len(m.pathResult) > 0, "There is no selected path result."),
+			commandItemFromSpec(specs[1], typedReason == "", typedReason),
+			commandItemFromSpec(specs[2], createReason == "", createReason),
+			commandItemFromSpec(specs[3], true, ""),
+			commandItemFromSpec(specs[4], true, ""),
+			commandItemFromSpec(specs[5], true, ""),
+			commandItemFromSpec(specs[6], true, ""),
+			commandItemFromSpec(specs[7], true, ""),
+			commandItemFromSpec(specs[8], true, ""),
 		}
 	}
+	specs := browseCommandSpecs()
 	selected, ok := m.selected()
 	killReason := ""
 	if !ok {
@@ -2900,16 +2909,64 @@ func (m Model) commandItems() []commandItem {
 		killReason = "The selected candidate is not an open tmux session."
 	}
 	return []commandItem{
-		{ID: commandOpenSelected, Title: "Open selected", Key: "<enter>", Description: "Switch to an existing session or create one for the selected root.", Enabled: ok, DisabledReason: "There is no selected candidate."},
-		{ID: commandOpenLast, Title: "Open last session", Key: "<c-`>", Description: "Switch to tmux's last active session.", Enabled: true},
-		{ID: commandKillSession, Title: "Kill selected session", Key: "<c-k>", Description: "Ask for confirmation before killing the selected tmux session.", Enabled: killReason == "", DisabledReason: killReason},
-		{ID: commandNewSession, Title: "Create session in current path", Key: "<c-n>", Description: "Create a path session in the current working directory.", Enabled: true},
-		{ID: commandPathSearch, Title: "Create session from path", Key: "<c-t>", Description: "Open filesystem path search, then create or switch to a session for the selected path.", Enabled: m.pathConfig.enabled, DisabledReason: "Path search is disabled in config."},
-		{ID: commandToggleHidden, Title: discoveryToggleHiddenTitle(m.discovery.SkipHidden), Key: "<meta-h>", Description: "Toggle whether hidden directories are skipped for configured repos and subdirs.", Enabled: true},
-		{ID: commandToggleIgnored, Title: discoveryToggleIgnoredTitle(m.discovery.SkipGitignored), Key: "<meta-i>", Description: "Toggle whether gitignored directories are skipped for configured repos and subdirs.", Enabled: true},
-		{ID: commandReload, Title: "Reload", Key: "<c-r>", Description: "Reload tmux sessions and configured root candidates.", Enabled: true},
-		{ID: commandHelp, Title: "Show help", Key: "?", Description: "Show help for the command palette.", Enabled: true},
-		{ID: commandQuit, Title: "Quit", Key: "<esc>", Description: "Quit tmux-parator.", Enabled: true},
+		commandItemFromSpec(specs[0], ok, "There is no selected candidate."),
+		commandItemFromSpec(specs[1], true, ""),
+		commandItemFromSpec(specs[2], killReason == "", killReason),
+		commandItemFromSpec(specs[3], true, ""),
+		commandItemFromSpec(specs[4], m.pathConfig.enabled, "Path search is disabled in config."),
+		commandItemFromSpec(specs[5], true, ""),
+		commandItemFromSpec(specs[6], true, ""),
+		commandItemFromSpec(specs[7], true, ""),
+		commandItemFromSpec(specs[8], true, ""),
+		commandItemFromSpec(specs[9], true, ""),
+	}
+}
+
+func commandItemFromSpec(spec commandSpec, enabled bool, disabledReason string) commandItem {
+	return commandItemFromSpecWithTitle(spec, spec.Title, enabled, disabledReason)
+}
+
+func commandItemFromSpecWithTitle(spec commandSpec, title string, enabled bool, disabledReason string) commandItem {
+	return commandItem{
+		ID:             spec.ID,
+		Title:          title,
+		Key:            spec.Key,
+		Description:    spec.Description,
+		Enabled:        enabled,
+		DisabledReason: disabledReason,
+	}
+}
+
+func helpItemFromSpec(spec commandSpec) helpItem {
+	return helpItem{Key: spec.Key, Action: spec.Title, Description: spec.Description}
+}
+
+func pathSearchCommandSpecs() []commandSpec {
+	return []commandSpec{
+		{ID: commandOpenSelected, Title: "Open selected result", Key: "<enter>", Description: "Create or switch to a tmux session for the selected fuzzy path result."},
+		{ID: commandOpenTyped, Title: "Open typed path", Key: "<c-p>", Description: "Open the exact typed prompt path when it exists as a directory."},
+		{ID: commandCreateTyped, Title: "Add typed path", Key: "<c-a>", Description: "Create the exact typed prompt path after confirmation, then create or switch to its tmux session."},
+		{ID: commandCycleRoot, Title: "Cycle prompt root", Key: "<c-o>", Description: "Cycle the path prompt through ~/ / ./ ../."},
+		{ID: commandToggleHidden, Title: "Toggle hidden path results", Key: "<meta-h>", Description: "Toggle whether hidden directories are skipped in the current path search."},
+		{ID: commandToggleIgnored, Title: "Toggle gitignored path results", Key: "<meta-i>", Description: "Toggle whether gitignored directories are skipped in the current path search."},
+		{ID: commandReload, Title: "Reload path search", Key: "<c-r>", Description: "Restart the current streamed path search."},
+		{ID: commandHelp, Title: "Show help", Key: "?", Description: "Show help for the command palette."},
+		{ID: commandQuit, Title: "Quit", Key: "<esc>", Description: "Quit tmux-parator."},
+	}
+}
+
+func browseCommandSpecs() []commandSpec {
+	return []commandSpec{
+		{ID: commandOpenSelected, Title: "Open selected", Key: "<enter>", Description: "Switch to an existing session or create one for the selected root."},
+		{ID: commandOpenLast, Title: "Open last session", Key: "<c-`>", Description: "Switch to tmux's last active session."},
+		{ID: commandKillSession, Title: "Kill selected session", Key: "<c-k>", Description: "Ask for confirmation before killing the selected tmux session."},
+		{ID: commandNewSession, Title: "Create session in current path", Key: "<c-n>", Description: "Create a path session in the current working directory."},
+		{ID: commandPathSearch, Title: "Create session from path", Key: "<c-t>", Description: "Open filesystem path search, then create or switch to a session for the selected path."},
+		{ID: commandToggleHidden, Title: "Toggle hidden configured paths", Key: "<meta-h>", Description: "Toggle whether hidden directories are skipped for configured repos and subdirs."},
+		{ID: commandToggleIgnored, Title: "Toggle gitignored configured paths", Key: "<meta-i>", Description: "Toggle whether gitignored directories are skipped for configured repos and subdirs."},
+		{ID: commandReload, Title: "Reload", Key: "<c-r>", Description: "Reload tmux sessions and configured root candidates."},
+		{ID: commandHelp, Title: "Show help", Key: "?", Description: "Show help for the command palette."},
+		{ID: commandQuit, Title: "Quit", Key: "<esc>", Description: "Quit tmux-parator."},
 	}
 }
 
@@ -2936,34 +2993,6 @@ func (m Model) commandMatches() []commandMatch {
 		matches = append(matches, commandMatch{item: item, titleIndexes: match.TitleIndexes})
 	}
 	return matches
-}
-
-func discoveryToggleHiddenTitle(skip bool) string {
-	if skip {
-		return "Show hidden configured paths"
-	}
-	return "Skip hidden configured paths"
-}
-
-func discoveryToggleIgnoredTitle(skip bool) string {
-	if skip {
-		return "Show gitignored configured paths"
-	}
-	return "Skip gitignored configured paths"
-}
-
-func pathToggleHiddenTitle(skip bool) string {
-	if skip {
-		return "Show hidden path results"
-	}
-	return "Skip hidden path results"
-}
-
-func pathToggleIgnoredTitle(skip bool) string {
-	if skip {
-		return "Show gitignored path results"
-	}
-	return "Skip gitignored path results"
 }
 
 func (m Model) runCommand(item commandItem) (tea.Model, tea.Cmd) {
@@ -3681,6 +3710,7 @@ func commandListHeight(appHeight int) int {
 
 func helpItemsForMode(previous mode) []helpItem {
 	if previous == modePathSearch {
+		specs := pathSearchCommandSpecs()
 		return []helpItem{
 			{Key: "type", Action: "edit path prompt", Description: "Type a path-like prompt; the text after the last slash is used as the fuzzy query."},
 			{Key: "backspace", Action: "remove character", Description: "Remove one character from the path prompt and reparse the root/query."},
@@ -3688,19 +3718,21 @@ func helpItemsForMode(previous mode) []helpItem {
 			{Key: "<tab>", Action: "complete/narrow", Description: "Complete the current path segment, or narrow into the selected fuzzy result."},
 			{Key: "<s-tab>", Action: "previous completion", Description: "Cycle backward through the current completion candidates."},
 			{Key: "<left>/<right>", Action: "accept completion cycle", Description: "Clear the current completion cycle so the next Tab completes the next path level."},
-			{Key: "<enter>", Action: "open selected result", Description: "Create or switch to a tmux session for the selected fuzzy result."},
-			{Key: "<c-p>", Action: "open typed path", Description: "Open the exact typed prompt path when it exists as a directory."},
-			{Key: "<c-a>", Action: "add typed path", Description: "Create the exact typed prompt path after confirmation, then create or switch to its tmux session."},
-			{Key: "<c-o>", Action: "cycle prompt root", Description: "Cycle the prompt through ~/ / ./ ../."},
+			helpItemFromSpec(specs[0]),
+			helpItemFromSpec(specs[1]),
+			helpItemFromSpec(specs[2]),
+			helpItemFromSpec(specs[3]),
 			{Key: "<c-`>", Action: "open last session", Description: "Switch to tmux's last active session."},
-			{Key: "<meta-h>", Action: "toggle hidden dirs", Description: "Toggle whether hidden directories are skipped in the current path search."},
-			{Key: "<meta-i>", Action: "toggle ignored dirs", Description: "Toggle whether gitignored directories are skipped in the current path search."},
-			{Key: "<c-r>", Action: "reload search", Description: "Restart the current streamed path search."},
+			helpItemFromSpec(specs[4]),
+			helpItemFromSpec(specs[5]),
+			helpItemFromSpec(specs[6]),
 			{Key: "<c-g>", Action: "command palette", Description: "Open the command palette for path-search actions."},
-			{Key: "?/<esc>", Action: "close help", Description: "Close this help popup and return to path search."},
+			helpItemFromSpec(specs[7]),
+			helpItemFromSpec(specs[8]),
 		}
 	}
 	if previous == modeCommands {
+		specs := browseCommandSpecs()
 		return []helpItem{
 			{Key: "type", Action: "filter commands", Description: "Fuzzy-search commands by title, key, and description."},
 			{Key: "backspace", Action: "remove character", Description: "Remove one character from the command search prompt."},
@@ -3709,22 +3741,24 @@ func helpItemsForMode(previous mode) []helpItem {
 			{Key: "<c-g>", Action: "close palette", Description: "Close the command palette and return to the previous mode."},
 			{Key: "<esc>", Action: "close palette/help", Description: "Close help, then close the command palette when pressed again."},
 			{Key: "?", Action: "toggle help", Description: "Show or close this help popup."},
-			{Key: "Quit command", Action: "quit app", Description: "Run the Quit command from the palette to exit tmux-parator."},
+			{Key: "Quit command", Action: specs[9].Title, Description: specs[9].Description},
 		}
 	}
+	specs := browseCommandSpecs()
 	return []helpItem{
 		{Key: "type", Action: "filter sessions and roots", Description: "Filter open tmux sessions and configured root candidates."},
-		{Key: "<enter>", Action: "open selected", Description: "Switch to an existing session or create one for the selected root."},
+		helpItemFromSpec(specs[0]),
 		{Key: "<up>/<down>", Action: "move selection", Description: "Move through matching sessions and root candidates."},
 		{Key: "<tab>/<s-tab>", Action: "jump sections", Description: "Jump between open sessions and available workspaces."},
 		{Key: "<c-g>", Action: "command overlay", Description: "Open the command overlay for less frequent actions."},
-		{Key: "<c-`>", Action: "open last session", Description: "Switch to tmux's last active session."},
-		{Key: "<c-n>", Action: "create session in path", Description: "Create a path session in the current working directory."},
-		{Key: "<c-t>", Action: "create session from path", Description: "Open filesystem path search, then create or switch to a session for the selected path."},
-		{Key: "<c-r>", Action: "reload", Description: "Reload tmux sessions and configured root candidates."},
-		{Key: "<meta-h>", Action: "toggle hidden roots", Description: "Toggle whether hidden directories are skipped for configured repos and subdirs."},
-		{Key: "<meta-i>", Action: "toggle ignored roots", Description: "Toggle whether gitignored directories are skipped for configured repos and subdirs."},
-		{Key: "<c-k>", Action: "kill session", Description: "Ask for confirmation before killing the selected tmux session."},
-		{Key: "?/<esc>", Action: "close help", Description: "Close this help popup and return to the main list."},
+		helpItemFromSpec(specs[1]),
+		helpItemFromSpec(specs[3]),
+		helpItemFromSpec(specs[4]),
+		helpItemFromSpec(specs[7]),
+		helpItemFromSpec(specs[5]),
+		helpItemFromSpec(specs[6]),
+		helpItemFromSpec(specs[2]),
+		helpItemFromSpec(specs[8]),
+		helpItemFromSpec(specs[9]),
 	}
 }

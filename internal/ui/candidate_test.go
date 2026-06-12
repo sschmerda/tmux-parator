@@ -632,7 +632,7 @@ func TestCommandPaletteIncludesToggleAndQuitCommands(t *testing.T) {
 	model.openCommands(modeBrowse)
 
 	titles := commandTitles(model.commandItems())
-	for _, want := range []string{"Show hidden configured paths", "Show gitignored configured paths", "Quit"} {
+	for _, want := range []string{"Toggle hidden configured paths", "Toggle gitignored configured paths", "Quit"} {
 		if !titles[want] {
 			t.Fatalf("command %q missing from main palette: %#v", want, titles)
 		}
@@ -640,7 +640,7 @@ func TestCommandPaletteIncludesToggleAndQuitCommands(t *testing.T) {
 
 	model.openCommands(modePathSearch)
 	titles = commandTitles(model.commandItems())
-	for _, want := range []string{"Add typed path", "Show hidden path results", "Show gitignored path results", "Quit"} {
+	for _, want := range []string{"Add typed path", "Toggle hidden path results", "Toggle gitignored path results", "Quit"} {
 		if !titles[want] {
 			t.Fatalf("command %q missing from path palette: %#v", want, titles)
 		}
@@ -1121,6 +1121,15 @@ func commandByID(items []commandItem, id commandID) (commandItem, bool) {
 	return commandItem{}, false
 }
 
+func helpByKey(items []helpItem, key string) (helpItem, bool) {
+	for _, item := range items {
+		if item.Key == key {
+			return item, true
+		}
+	}
+	return helpItem{}, false
+}
+
 type fakeSessionClient struct {
 	switchLastCalls    int
 	killCalls          int
@@ -1164,6 +1173,44 @@ func (f *fakeSessionClient) TagSession(_ context.Context, session string, metada
 	f.taggedSession = session
 	f.taggedMetadata = metadata
 	return nil
+}
+
+func TestBrowseCommandTextMatchesHelp(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{Enabled: true}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.openCommands(modeBrowse)
+	helpItems := helpItemsForMode(modeBrowse)
+
+	for _, command := range model.commandItems() {
+		help, ok := helpByKey(helpItems, command.Key)
+		if !ok {
+			t.Fatalf("help for key %q missing", command.Key)
+		}
+		if help.Action != command.Title {
+			t.Fatalf("action for %q = %q, want %q", command.Key, help.Action, command.Title)
+		}
+		if help.Description != command.Description {
+			t.Fatalf("description for %q = %q, want %q", command.Key, help.Description, command.Description)
+		}
+	}
+}
+
+func TestPathSearchCommandTextMatchesHelp(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.openCommands(modePathSearch)
+	helpItems := helpItemsForMode(modePathSearch)
+
+	for _, command := range model.commandItems() {
+		help, ok := helpByKey(helpItems, command.Key)
+		if !ok {
+			t.Fatalf("help for key %q missing", command.Key)
+		}
+		if help.Action != command.Title {
+			t.Fatalf("action for %q = %q, want %q", command.Key, help.Action, command.Title)
+		}
+		if help.Description != command.Description {
+			t.Fatalf("description for %q = %q, want %q", command.Key, help.Description, command.Description)
+		}
+	}
 }
 
 func TestPathSearchHelpReturnsToPathSearch(t *testing.T) {
