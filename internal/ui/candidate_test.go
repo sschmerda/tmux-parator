@@ -840,7 +840,7 @@ func TestCtrlNOpensRenamePromptPrefilledWithSelectedSession(t *testing.T) {
 	}
 }
 
-func TestCtrlNOnAvailableWorkspaceShowsError(t *testing.T) {
+func TestCtrlNOnAvailableWorkspaceShowsNotice(t *testing.T) {
 	client := &fakeSessionClient{}
 	model := NewModel(client, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
 	model.rootItems = []discovery.Candidate{{Name: "api", Path: "/tmp/api", Mode: "repo"}}
@@ -855,28 +855,28 @@ func TestCtrlNOnAvailableWorkspaceShowsError(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("ctrl-n on workspace returned command")
 	}
-	if model.mode != modeBrowse || model.err == nil || !strings.Contains(model.err.Error(), "not an open tmux session") {
-		t.Fatalf("mode/err = %v/%v, want browse error", model.mode, model.err)
+	if model.mode != modeBrowse || model.notice == nil || !strings.Contains(model.notice.Error(), "not an open tmux session") {
+		t.Fatalf("mode/notice = %v/%v, want browse notice", model.mode, model.notice)
 	}
 	view := ansi.Strip(model.View())
-	if !strings.Contains(view, "Error") || !strings.Contains(view, "not an open tmux session") || !strings.Contains(view, "<esc> dismiss") {
-		t.Fatalf("workspace rename error missing:\n%s", view)
+	if !strings.Contains(view, "Notice") || !strings.Contains(view, "not an open tmux session") || !strings.Contains(view, "<enter>/<esc> dismiss") {
+		t.Fatalf("workspace rename notice missing:\n%s", view)
 	}
 
-	updated, cmd = model.updateKey(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, cmd = model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
 	if cmd != nil {
-		t.Fatal("esc while rename error visible returned command")
+		t.Fatal("enter while rename notice visible returned command")
 	}
-	if model.err != nil {
-		t.Fatalf("err = %v, want dismissed", model.err)
+	if model.notice != nil {
+		t.Fatalf("notice = %v, want dismissed", model.notice)
 	}
 	if client.newSessionName != "" || client.switchedSession != "" {
-		t.Fatalf("client used after rename error dismiss: %#v", client)
+		t.Fatalf("client used after rename notice dismiss: %#v", client)
 	}
 }
 
-func TestRenameCommandOnAvailableWorkspaceShowsError(t *testing.T) {
+func TestRenameCommandOnAvailableWorkspaceShowsNotice(t *testing.T) {
 	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
 	model.rootItems = []discovery.Candidate{{Name: "api", Path: "/tmp/api", Mode: "repo"}}
 	model.rebuildCandidates()
@@ -894,8 +894,28 @@ func TestRenameCommandOnAvailableWorkspaceShowsError(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("rename command on workspace returned command")
 	}
-	if model.mode != modeBrowse || model.err == nil || !strings.Contains(model.err.Error(), "not an open tmux session") {
-		t.Fatalf("mode/err = %v/%v, want browse error", model.mode, model.err)
+	if model.mode != modeBrowse || model.notice == nil || !strings.Contains(model.notice.Error(), "not an open tmux session") {
+		t.Fatalf("mode/notice = %v/%v, want browse notice", model.mode, model.notice)
+	}
+}
+
+func TestUnavailableBrowseCommandShowsNotice(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.mode = modeCommands
+	model.commandPreviousMode = modeBrowse
+
+	item, ok := commandByID(model.commandItems(), commandOpenSelected)
+	if !ok {
+		t.Fatal("open selected command missing")
+	}
+	updated, cmd := model.runCommand(item)
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("unavailable command returned command")
+	}
+	if model.mode != modeBrowse || model.notice == nil || !strings.Contains(model.notice.Error(), "There is no selected candidate") {
+		t.Fatalf("mode/notice = %v/%v, want browse notice", model.mode, model.notice)
 	}
 }
 
@@ -916,11 +936,23 @@ func TestRenameSessionRejectsDuplicateName(t *testing.T) {
 	if model.mode != modeRenameSession {
 		t.Fatalf("mode = %v, want rename session", model.mode)
 	}
-	if model.err == nil || !strings.Contains(model.err.Error(), "already exists") {
-		t.Fatalf("err = %v, want duplicate error", model.err)
+	if model.notice == nil || !strings.Contains(model.notice.Error(), "already exists") {
+		t.Fatalf("notice = %v, want duplicate notice", model.notice)
 	}
 	if client.renamedOld != "" || client.renamedNew != "" {
 		t.Fatalf("rename client used for duplicate: %#v", client)
+	}
+
+	updated, cmd = model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("enter while duplicate notice visible returned command")
+	}
+	if model.notice != nil {
+		t.Fatalf("notice = %v, want dismissed", model.notice)
+	}
+	if model.mode != modeRenameSession {
+		t.Fatalf("mode = %v, want rename session after notice dismissal", model.mode)
 	}
 }
 

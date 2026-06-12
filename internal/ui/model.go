@@ -100,6 +100,7 @@ type Model struct {
 	err                  error
 	rootErr              error
 	pathErr              error
+	notice               error
 	pathNotice           error
 	mode                 mode
 	previousMode         mode
@@ -392,6 +393,12 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
+	if m.notice != nil {
+		if msg.String() == "enter" {
+			m.notice = nil
+		}
+		return m, nil
+	}
 	if m.showsPathSearchBase() && m.pathNotice != nil {
 		if msg.String() == "enter" {
 			m.pathNotice = nil
@@ -581,16 +588,16 @@ func (m Model) updateCreateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		name := strings.TrimSpace(m.createText)
 		if name == "" {
-			m.err = fmt.Errorf("session name is empty")
+			m.notice = fmt.Errorf("session name is empty")
 			return m, nil
 		}
 		if m.hasSession(name) {
-			m.err = fmt.Errorf("session name already exists: %s", name)
+			m.notice = fmt.Errorf("session name already exists: %s", name)
 			return m, nil
 		}
 		path := strings.TrimSpace(m.createPath)
 		if path == "" {
-			m.err = fmt.Errorf("selected item has no path")
+			m.notice = fmt.Errorf("selected item has no path")
 			return m, nil
 		}
 		metadata := m.createMetadata
@@ -623,7 +630,7 @@ func (m Model) updateRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		name := strings.TrimSpace(m.renameText)
 		if name == "" {
-			m.err = fmt.Errorf("session name is empty")
+			m.notice = fmt.Errorf("session name is empty")
 			return m, nil
 		}
 		if name == m.renameOriginal {
@@ -633,7 +640,7 @@ func (m Model) updateRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.hasSessionExcept(name, m.renameOriginal) {
-			m.err = fmt.Errorf("session name already exists: %s", name)
+			m.notice = fmt.Errorf("session name already exists: %s", name)
 			return m, nil
 		}
 		m.loading = true
@@ -932,6 +939,9 @@ func (m Model) renderWithOverlay(content string) string {
 	}
 	if m.mode == modeHelp {
 		base = placeOverlay(base, renderHelpPanel(m.styles, m.previousMode, m.helpCursor, m.helpScroll, innerWidth, innerHeight), innerWidth, innerHeight)
+	}
+	if m.notice != nil {
+		base = placeCenteredOverlay(base, renderPathNoticePopup(m.styles, m.notice.Error(), innerWidth), innerWidth, innerHeight)
 	}
 	if m.showsPathSearchBase() && m.pathNotice != nil {
 		base = placeCenteredOverlay(base, renderPathNoticePopup(m.styles, m.pathNotice.Error(), innerWidth), innerWidth, innerHeight)
@@ -1589,7 +1599,7 @@ func (m Model) confirmKill() (tea.Model, tea.Cmd) {
 func (m Model) openRenameSession() (tea.Model, tea.Cmd) {
 	selected, ok := m.selected()
 	if !ok || selected.kind != candidateSession {
-		m.err = fmt.Errorf("selected item is not an open tmux session")
+		m.notice = fmt.Errorf("selected item is not an open tmux session")
 		return m, nil
 	}
 	m.mode = modeRenameSession
@@ -1605,7 +1615,7 @@ func (m *Model) openCreateSession() {
 	}
 	path, metadata, ok := m.namedSessionTarget(selected)
 	if !ok {
-		m.err = fmt.Errorf("selected item has no path")
+		m.notice = fmt.Errorf("selected item has no path")
 		return
 	}
 	m.mode = modeCreateSession
@@ -1727,6 +1737,10 @@ func (m Model) errorMessage() (string, bool) {
 }
 
 func (m *Model) clearVisibleError() bool {
+	if m.notice != nil {
+		m.notice = nil
+		return true
+	}
 	if m.showsPathSearchBase() && m.pathNotice != nil {
 		m.pathNotice = nil
 		return true
@@ -3261,11 +3275,6 @@ func (m Model) notifyCommandUnavailable(item commandItem) Model {
 	if reason == "" {
 		reason = "Command is not available in the current context."
 	}
-	if item.ID == commandRenameSession {
-		m.mode = modeBrowse
-		m.err = fmt.Errorf("%s: %s", item.Title, reason)
-		return m
-	}
 	if m.commandPreviousMode == modePathSearch {
 		m.mode = modePathSearch
 		m.pathErr = fmt.Errorf("%s: %s", item.Title, reason)
@@ -3273,7 +3282,7 @@ func (m Model) notifyCommandUnavailable(item commandItem) Model {
 		return m
 	}
 	m.mode = modeBrowse
-	m.err = fmt.Errorf("%s: %s", item.Title, reason)
+	m.notice = fmt.Errorf("%s: %s", item.Title, reason)
 	return m
 }
 
