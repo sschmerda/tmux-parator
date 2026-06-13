@@ -1357,6 +1357,25 @@ func TestMainViewUsesStatusChipsInsteadOfPromptStatusLine(t *testing.T) {
 	if !strings.Contains(view, "HIDDEN SKIP") || !strings.Contains(view, "IGNORED SHOW") {
 		t.Fatalf("view missing status chips:\n%s", view)
 	}
+	if strings.Contains(view, "enter open") || strings.Contains(view, "ctrl-? help") {
+		t.Fatalf("view contains inline hotkey help:\n%s", view)
+	}
+}
+
+func TestPathSearchFooterKeepsStatusChipsWithoutHotkeyHelp(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.mode = modePathSearch
+	model.width = 100
+	model.height = 20
+	model.pathResult = []candidate{{kind: candidatePath, fsPath: pathsearch.Candidate{Name: "main", Path: "/tmp/main"}}}
+
+	view := model.View()
+	if !strings.Contains(view, "PATH ON") || !strings.Contains(view, "HIDDEN") || !strings.Contains(view, "IGNORED") {
+		t.Fatalf("path search view missing status chips:\n%s", view)
+	}
+	if strings.Contains(view, "enter open") || strings.Contains(view, "ctrl-? help") {
+		t.Fatalf("path search view contains inline hotkey help:\n%s", view)
+	}
 }
 
 func TestMainViewRendersBrowseColumnHeaders(t *testing.T) {

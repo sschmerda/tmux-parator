@@ -837,7 +837,7 @@ func (m Model) View() string {
 		b.WriteString("\n")
 	}
 
-	appendAnchoredFooter(&b, renderInsetRow(renderFooterAlignedRow(renderStatusFooter(false, m.discovery.SkipHidden, m.discovery.SkipGitignored, helpText, contentWidth-searchBoxInnerOffset, s), s), m.innerWidth(), s), m.innerHeight())
+	appendAnchoredFooter(&b, renderInsetRow(renderFooterAlignedRow(renderStatusFooter(false, m.discovery.SkipHidden, m.discovery.SkipGitignored, "", contentWidth-searchBoxInnerOffset, s), s), m.innerWidth(), s), m.innerHeight())
 	return m.renderWithOverlay(b.String())
 }
 
@@ -888,9 +888,9 @@ func (m Model) pathSearchView() string {
 		b.WriteString("\n")
 	}
 
-	footerHelp := pathSearchHelpText
+	footerHelp := ""
 	if m.pathErr != nil {
-		footerHelp = "error: " + m.pathErr.Error() + " | " + pathSearchHelpText
+		footerHelp = "error: " + m.pathErr.Error()
 	}
 	appendAnchoredFooter(&b, renderInsetRow(renderFooterAlignedRow(renderStatusFooter(true, m.pathConfig.options.SkipHidden, m.pathConfig.options.SkipGitignored, footerHelp, contentWidth-searchBoxInnerOffset, s), s), m.innerWidth(), s), m.innerHeight())
 	return m.renderWithOverlay(b.String())
