@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -479,6 +480,54 @@ func TestCursorMovementScrollsCandidateList(t *testing.T) {
 	}
 	if model.scroll == 0 {
 		t.Fatal("scroll = 0, want list to scroll")
+	}
+}
+
+func TestBrowseCursorStaysRenderedWhenMovingBelowViewport(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.width = 100
+	model.height = 16
+	for i := 0; i < 12; i++ {
+		model.sessions = append(model.sessions, tmux.Session{Name: fmt.Sprintf("session-%02d", i)})
+	}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	for i := 0; i < 6; i++ {
+		updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyDown})
+		model = updated.(Model)
+	}
+
+	view := ansi.Strip(model.View())
+	if !strings.Contains(view, "session-06") {
+		t.Fatalf("selected session is not rendered after scrolling:\n%s", view)
+	}
+	if !strings.Contains(view, "▌") {
+		t.Fatalf("selection marker is not rendered after scrolling:\n%s", view)
+	}
+}
+
+func TestPathCursorStaysRenderedWhenMovingBelowViewport(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.mode = modePathSearch
+	model.width = 100
+	model.height = 16
+	for i := 0; i < 12; i++ {
+		name := fmt.Sprintf("path-%02d", i)
+		model.pathResult = append(model.pathResult, candidate{kind: candidatePath, fsPath: pathsearch.Candidate{Name: name, Path: "/tmp/" + name}})
+	}
+
+	for i := 0; i < 6; i++ {
+		updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyDown})
+		model = updated.(Model)
+	}
+
+	view := ansi.Strip(model.View())
+	if !strings.Contains(view, "path-06") {
+		t.Fatalf("selected path is not rendered after scrolling:\n%s", view)
+	}
+	if !strings.Contains(view, "▌") {
+		t.Fatalf("selection marker is not rendered after scrolling:\n%s", view)
 	}
 }
 

@@ -1903,13 +1903,13 @@ func (m *Model) ensurePathCursorVisible() {
 		return
 	}
 	limit := m.pathListLimit()
-	for m.pathCursor-m.pathScroll+1 > limit && m.pathScroll < m.pathCursor {
+	for m.pathCursorRowsFromScroll(limit) > limit && m.pathScroll < m.pathCursor {
 		m.pathScroll++
 	}
 }
 
 func (m Model) cursorRowsFromScroll(limit int) int {
-	rows := 0
+	rows := m.browseFixedRows()
 	for i := m.scroll; i <= m.cursor && i < len(m.filtered); i++ {
 		if m.sectionHeaderBefore(i) {
 			rows++
@@ -1917,6 +1917,29 @@ func (m Model) cursorRowsFromScroll(limit int) int {
 		rows++
 	}
 	if m.showTopOverflow(limit) {
+		rows++
+	}
+	return rows
+}
+
+func (m Model) pathCursorRowsFromScroll(limit int) int {
+	rows := m.pathFixedRows()
+	if m.showPathTopOverflow(limit) {
+		rows++
+	}
+	return rows + m.pathCursor - m.pathScroll + 1
+}
+
+func (m Model) browseFixedRows() int {
+	if hasVisibleBrowseColumns(m.renderColumns(m.filtered)) {
+		return 1
+	}
+	return 0
+}
+
+func (m Model) pathFixedRows() int {
+	rows := 1
+	if hasVisibleBrowseColumns(m.renderColumns(m.pathResult)) {
 		rows++
 	}
 	return rows
