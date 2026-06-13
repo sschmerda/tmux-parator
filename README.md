@@ -267,6 +267,14 @@ theme = "shades-of-purple"
 popup_width = "90%"
 popup_height = "90%"
 
+[ui.dialogs.small]
+width = 72
+height = 9
+
+[ui.dialogs.panel]
+width = 88
+height = 0
+
 [ui.glyphs]
 repo = ""
 subdir = ""
@@ -350,6 +358,10 @@ Config fields:
 | `ui.theme` | global | Built-in theme name. Defaults to `shades-of-purple`. |
 | `ui.popup_width` | global | Width passed to `tmux display-popup -w`. Defaults to `90%`. |
 | `ui.popup_height` | global | Height passed to `tmux display-popup -h`. Defaults to `90%`. |
+| `ui.dialogs.small.width` | global | Target width for confirmation, name, notice, and error frames in terminal cells. Defaults to `72`. |
+| `ui.dialogs.small.height` | global | Preferred height for small frames. `0` uses content-responsive height. Defaults to `9`. |
+| `ui.dialogs.panel.width` | global | Target width for command palette and help frames in terminal cells. Defaults to `88`. |
+| `ui.dialogs.panel.height` | global | Preferred height for command palette and help frames. `0` uses viewport-responsive auto height. Defaults to `0`. |
 | `ui.glyphs.repo` | global | Glyph used for repo chips. Defaults to ``. |
 | `ui.glyphs.subdir` | global | Glyph used for subdir chips. Defaults to ``. |
 | `ui.glyphs.path` | global | Glyph used for ad-hoc path session chips. Defaults to `󰉋`. |
@@ -403,6 +415,12 @@ uses the remaining row width. For the path/detail column, `max_width = 0` means
 uncapped. The main/root search uses root-prefixed compact paths for configured
 workspace rows, for example `repos/tmux-parator`, so open sessions and
 available workspaces use the same path scheme.
+
+For `ui.dialogs.*.width`, positive values are target frame widths in terminal
+cells; frames shrink to fit narrow terminals. For `ui.dialogs.*.height`,
+positive values are preferred heights that can grow for content, while
+`small.height = 0` is content-responsive and `panel.height = 0` keeps the
+viewport-responsive command/help sizing.
 
 Root modes:
 

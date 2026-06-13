@@ -66,7 +66,7 @@ Controls:
 		}
 	}
 
-	model := ui.NewModel(tmux.NewClient(runner), activeTheme, cfg.Roots, discovery.OptionsFromConfig(cfg.Discovery), cfg.PathSearch, cfg.UI.Glyphs, cfg.UI.GlyphColors, cfg.UI.Columns)
+	model := ui.NewModel(tmux.NewClient(runner), activeTheme, cfg.Roots, discovery.OptionsFromConfig(cfg.Discovery), cfg.PathSearch, cfg.UI.Glyphs, cfg.UI.GlyphColors, cfg.UI.Columns, cfg.UI.Dialogs)
 	_, err = tea.NewProgram(model, tea.WithAltScreen()).Run()
 	return err
 }

@@ -2446,6 +2446,69 @@ func TestRenderColumnsAutoSizesRootAndName(t *testing.T) {
 	}
 }
 
+func TestSmallDialogUsesConfiguredFrameSize(t *testing.T) {
+	dialogs := config.Dialogs{
+		Small: config.DialogSize{Width: 54, Height: 11},
+		Panel: config.DialogSize{Width: 88, Height: 0},
+	}
+	rendered := renderConfirmKill(newStyles(theme.Default()), dialogs, "api", confirmCancel, 120, 40)
+	lines := strings.Split(rendered, "\n")
+
+	if got := lipgloss.Width(lines[0]); got != 54 {
+		t.Fatalf("small dialog width = %d, want 54:\n%s", got, rendered)
+	}
+	if got := len(lines); got != 11 {
+		t.Fatalf("small dialog height = %d, want 11:\n%s", got, rendered)
+	}
+}
+
+func TestSmallDialogShrinksOnNarrowTerminal(t *testing.T) {
+	dialogs := config.Dialogs{
+		Small: config.DialogSize{Width: 72, Height: 9},
+		Panel: config.DialogSize{Width: 88, Height: 0},
+	}
+	rendered := renderPathNoticePopup(newStyles(theme.Default()), dialogs, "path already exists", 30, 20)
+	lines := strings.Split(rendered, "\n")
+
+	if got := lipgloss.Width(lines[0]); got != 26 {
+		t.Fatalf("small dialog width = %d, want shrink-to-fit width 26:\n%s", got, rendered)
+	}
+}
+
+func TestPanelDialogsShareConfiguredWidthAndAutoHeight(t *testing.T) {
+	dialogs := config.Dialogs{
+		Small: config.DialogSize{Width: 72, Height: 9},
+		Panel: config.DialogSize{Width: 70, Height: 0},
+	}
+	matches := []commandMatch{{
+		item: commandItem{
+			ID:          commandHelp,
+			Title:       "Show help",
+			Key:         "<c-?>",
+			Description: "Show help for the command palette.",
+			Enabled:     true,
+		},
+	}}
+	commandPanel := renderCommandPalette(newStyles(theme.Default()), dialogs, matches, "", 0, 0, 120, 24)
+	helpPanel := renderHelpPanel(newStyles(theme.Default()), dialogs, modeBrowse, 0, 0, 120, 24)
+
+	if got := lipgloss.Width(strings.Split(commandPanel, "\n")[0]); got != 70 {
+		t.Fatalf("command panel width = %d, want 70:\n%s", got, commandPanel)
+	}
+	if got := lipgloss.Width(strings.Split(helpPanel, "\n")[0]); got != 70 {
+		t.Fatalf("help panel width = %d, want 70:\n%s", got, helpPanel)
+	}
+
+	explicitAutoDialogs := config.Dialogs{
+		Small: config.DialogSize{Width: 72, Height: 9},
+		Panel: config.DialogSize{Width: 70, Height: 20},
+	}
+	explicitAutoPanel := renderHelpPanel(newStyles(theme.Default()), explicitAutoDialogs, modeBrowse, 0, 0, 120, 24)
+	if got, want := len(strings.Split(helpPanel, "\n")), len(strings.Split(explicitAutoPanel, "\n")); got != want {
+		t.Fatalf("auto panel rendered height = %d, want explicit auto-equivalent height %d", got, want)
+	}
+}
+
 func TestTruncateDots(t *testing.T) {
 	if got := truncateDots("repositories-extra", rootColumnWidth); got != "repositor..." {
 		t.Fatalf("truncateDots() = %q, want repositor...", got)

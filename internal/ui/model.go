@@ -60,6 +60,7 @@ type Model struct {
 	glyphs               config.Glyphs
 	glyphColors          config.GlyphColors
 	columns              config.Columns
+	dialogs              config.Dialogs
 	sessions             []tmux.Session
 	rootItems            []discovery.Candidate
 	candidates           []candidate
@@ -186,10 +187,15 @@ type styles struct {
 	filterValue   lipgloss.Style
 }
 
-func NewModel(client sessionClient, activeTheme theme.Theme, roots []config.Root, discoveryOptions discovery.Options, pathSearch config.PathSearch, glyphs config.Glyphs, glyphColors config.GlyphColors, columns config.Columns) Model {
+func NewModel(client sessionClient, activeTheme theme.Theme, roots []config.Root, discoveryOptions discovery.Options, pathSearch config.PathSearch, glyphs config.Glyphs, glyphColors config.GlyphColors, columns config.Columns, dialogs ...config.Dialogs) Model {
 	glyphs = normalizeUIGlyphs(glyphs)
 	glyphColors = normalizeUIGlyphColors(glyphColors)
 	columns = normalizeUIColumns(columns)
+	dialogConfig := config.Dialogs{}
+	if len(dialogs) > 0 {
+		dialogConfig = dialogs[0]
+	}
+	dialogConfig = normalizeUIDialogs(dialogConfig)
 	return Model{
 		client:      client,
 		roots:       roots,
@@ -197,6 +203,7 @@ func NewModel(client sessionClient, activeTheme theme.Theme, roots []config.Root
 		glyphs:      glyphs,
 		glyphColors: glyphColors,
 		columns:     columns,
+		dialogs:     dialogConfig,
 		pathConfig: pathsearchConfig{
 			enabled: pathSearch.Enabled,
 			roots:   pathSearch.Roots,
@@ -923,31 +930,31 @@ func (m Model) renderWithOverlay(content string) string {
 	innerHeight := m.innerHeight()
 	base := m.styles.root.Width(innerWidth).Height(innerHeight).Render(content)
 	if m.mode == modeConfirmKill {
-		base = placeCenteredOverlay(base, renderConfirmKill(m.styles, m.confirmKillSessionName(), m.confirmChoice, innerWidth), innerWidth, innerHeight)
+		base = placeCenteredOverlay(base, renderConfirmKill(m.styles, m.dialogs, m.confirmKillSessionName(), m.confirmChoice, innerWidth, innerHeight), innerWidth, innerHeight)
 	}
 	if m.mode == modeConfirmCreatePath {
-		base = placeCenteredOverlay(base, renderConfirmCreatePath(m.styles, m.createPathInput, m.confirmChoice, innerWidth), innerWidth, innerHeight)
+		base = placeCenteredOverlay(base, renderConfirmCreatePath(m.styles, m.dialogs, m.createPathInput, m.confirmChoice, innerWidth, innerHeight), innerWidth, innerHeight)
 	}
 	if m.mode == modeCreateSession {
-		base = placeCenteredOverlay(base, renderCreateSession(m.styles, m.createText, innerWidth), innerWidth, innerHeight)
+		base = placeCenteredOverlay(base, renderCreateSession(m.styles, m.dialogs, m.createText, innerWidth, innerHeight), innerWidth, innerHeight)
 	}
 	if m.mode == modeRenameSession {
-		base = placeCenteredOverlay(base, renderRenameSession(m.styles, m.renameText, innerWidth), innerWidth, innerHeight)
+		base = placeCenteredOverlay(base, renderRenameSession(m.styles, m.dialogs, m.renameText, innerWidth, innerHeight), innerWidth, innerHeight)
 	}
 	if m.mode == modeCommands || (m.mode == modeHelp && m.previousMode == modeCommands) {
-		base = placeOverlay(base, renderCommandPalette(m.styles, m.commandMatches(), m.commandInput, m.commandCursor, m.commandScroll, innerWidth, innerHeight), innerWidth, innerHeight)
+		base = placeOverlay(base, renderCommandPalette(m.styles, m.dialogs, m.commandMatches(), m.commandInput, m.commandCursor, m.commandScroll, innerWidth, innerHeight), innerWidth, innerHeight)
 	}
 	if m.mode == modeHelp {
-		base = placeOverlay(base, renderHelpPanel(m.styles, m.previousMode, m.helpCursor, m.helpScroll, innerWidth, innerHeight), innerWidth, innerHeight)
+		base = placeOverlay(base, renderHelpPanel(m.styles, m.dialogs, m.previousMode, m.helpCursor, m.helpScroll, innerWidth, innerHeight), innerWidth, innerHeight)
 	}
 	if m.notice != nil {
-		base = placeCenteredOverlay(base, renderPathNoticePopup(m.styles, m.notice.Error(), innerWidth), innerWidth, innerHeight)
+		base = placeCenteredOverlay(base, renderPathNoticePopup(m.styles, m.dialogs, m.notice.Error(), innerWidth, innerHeight), innerWidth, innerHeight)
 	}
 	if m.showsPathSearchBase() && m.pathNotice != nil {
-		base = placeCenteredOverlay(base, renderPathNoticePopup(m.styles, m.pathNotice.Error(), innerWidth), innerWidth, innerHeight)
+		base = placeCenteredOverlay(base, renderPathNoticePopup(m.styles, m.dialogs, m.pathNotice.Error(), innerWidth, innerHeight), innerWidth, innerHeight)
 	}
 	if message, ok := m.errorMessage(); ok {
-		base = placeCenteredOverlay(base, renderErrorPopup(m.styles, message, innerWidth), innerWidth, innerHeight)
+		base = placeCenteredOverlay(base, renderErrorPopup(m.styles, m.dialogs, message, innerWidth, innerHeight), innerWidth, innerHeight)
 	}
 	return m.styles.appFrame.Width(innerWidth).Height(innerHeight).Render(base)
 }
@@ -1879,7 +1886,7 @@ func (m *Model) openCommands(previous mode) {
 }
 
 func (m *Model) ensureCommandCursorVisible() {
-	limit := commandListHeight(m.height)
+	limit := commandListHeightForFrame(panelDialogFrame(m.dialogs, m.innerWidth(), m.innerHeight()))
 	if m.commandCursor < m.commandScroll {
 		m.commandScroll = m.commandCursor
 		return
@@ -1913,7 +1920,7 @@ func (m *Model) openHelp(previous mode) {
 }
 
 func (m *Model) ensureHelpCursorVisible() {
-	limit := helpListHeight(m.height)
+	limit := helpListHeightForFrame(panelDialogFrame(m.dialogs, m.innerWidth(), m.innerHeight()))
 	if m.helpCursor < m.helpScroll {
 		m.helpScroll = m.helpCursor
 		return
@@ -3286,14 +3293,20 @@ func (m Model) notifyCommandUnavailable(item commandItem) Model {
 	return m
 }
 
-func renderCommandPalette(s styles, matches []commandMatch, query string, cursor int, scroll int, appWidth int, appHeight int) string {
+type dialogFrame struct {
+	width  int
+	height int
+}
+
+func renderCommandPalette(s styles, dialogs config.Dialogs, matches []commandMatch, query string, cursor int, scroll int, appWidth int, appHeight int) string {
 	if cursor < 0 {
 		cursor = 0
 	}
 	if cursor >= len(matches) {
 		cursor = len(matches) - 1
 	}
-	width := helpPanelWidth(appWidth)
+	frame := panelDialogFrame(dialogs, appWidth, appHeight)
+	width := frame.width
 	description := "Type to fuzzy-search commands."
 	if len(matches) > 0 && cursor >= 0 {
 		description = matches[cursor].item.Description
@@ -3302,7 +3315,7 @@ func renderCommandPalette(s styles, matches []commandMatch, query string, cursor
 		}
 	}
 	descriptionLines := wrapHelpDescription(description, helpDescriptionTextWidth(width))
-	height := commandListHeight(appHeight)
+	height := commandListHeightForFrame(frame)
 	if scroll < 0 {
 		scroll = 0
 	}
@@ -3316,7 +3329,7 @@ func renderCommandPalette(s styles, matches []commandMatch, query string, cursor
 		}
 	}
 
-	panelHeight := helpMainBoxHeight(appHeight)
+	panelHeight := panelMainBoxHeight(frame)
 	contentWidth := width - 2
 	horizontalPadding := 3
 	bodyWidth := contentWidth - horizontalPadding*2
@@ -3380,14 +3393,8 @@ func renderCommandRow(match commandMatch, selected bool, s styles, width int) st
 	return line
 }
 
-func renderConfirmKill(s styles, sessionName string, choice confirmChoice, appWidth int) string {
-	width := helpPanelWidth(appWidth)
-	if width > 72 {
-		width = 72
-	}
-	if width < 42 {
-		width = 42
-	}
+func renderConfirmKill(s styles, dialogs config.Dialogs, sessionName string, choice confirmChoice, appWidth int, appHeight int) string {
+	width := smallDialogWidth(dialogs, appWidth)
 	bodyWidth := width - 8
 	if bodyWidth < 20 {
 		bodyWidth = 20
@@ -3399,17 +3406,11 @@ func renderConfirmKill(s styles, sessionName string, choice confirmChoice, appWi
 	lines := wrapHelpDescription(message, bodyWidth)
 	lines = append(lines, "")
 	lines = append(lines, renderConfirmAction("Cancel", "n/<esc>", choice == confirmCancel, s)+s.popupBody.Render("   ")+renderConfirmAction("Confirm", "y", choice == confirmYes, s))
-	return renderCenteredTitledBox("Confirm", "", strings.Join(lines, "\n"), width, len(lines)+4, 3, s)
+	return renderCenteredTitledBox("Confirm", "", strings.Join(lines, "\n"), width, smallDialogHeight(dialogs, appHeight, len(lines)+4), 3, s)
 }
 
-func renderConfirmCreatePath(s styles, pathInput string, choice confirmChoice, appWidth int) string {
-	width := helpPanelWidth(appWidth)
-	if width > 72 {
-		width = 72
-	}
-	if width < 42 {
-		width = 42
-	}
+func renderConfirmCreatePath(s styles, dialogs config.Dialogs, pathInput string, choice confirmChoice, appWidth int, appHeight int) string {
+	width := smallDialogWidth(dialogs, appWidth)
 	bodyWidth := width - 8
 	if bodyWidth < 20 {
 		bodyWidth = 20
@@ -3421,7 +3422,7 @@ func renderConfirmCreatePath(s styles, pathInput string, choice confirmChoice, a
 	lines := wrapHelpDescription(message, bodyWidth)
 	lines = append(lines, "")
 	lines = append(lines, renderConfirmAction("Cancel", "n/<esc>", choice == confirmCancel, s)+s.popupBody.Render("   ")+renderConfirmAction("Create", "y", choice == confirmYes, s))
-	return renderCenteredTitledBox("Confirm", "", strings.Join(lines, "\n"), width, len(lines)+4, 3, s)
+	return renderCenteredTitledBox("Confirm", "", strings.Join(lines, "\n"), width, smallDialogHeight(dialogs, appHeight, len(lines)+4), 3, s)
 }
 
 func renderConfirmAction(label string, key string, selected bool, s styles) string {
@@ -3436,22 +3437,16 @@ func renderConfirmAction(label string, key string, selected bool, s styles) stri
 	return s.popupMuted.Render(text)
 }
 
-func renderCreateSession(s styles, value string, appWidth int) string {
-	return renderNamePrompt(s, "Create Named Session", "Create a tmux session from the selected row.", "create", value, appWidth)
+func renderCreateSession(s styles, dialogs config.Dialogs, value string, appWidth int, appHeight int) string {
+	return renderNamePrompt(s, dialogs, "Create Named Session", "Create a tmux session from the selected row.", "create", value, appWidth, appHeight)
 }
 
-func renderRenameSession(s styles, value string, appWidth int) string {
-	return renderNamePrompt(s, "Rename Session", "Rename the selected tmux session.", "rename", value, appWidth)
+func renderRenameSession(s styles, dialogs config.Dialogs, value string, appWidth int, appHeight int) string {
+	return renderNamePrompt(s, dialogs, "Rename Session", "Rename the selected tmux session.", "rename", value, appWidth, appHeight)
 }
 
-func renderNamePrompt(s styles, title string, message string, action string, value string, appWidth int) string {
-	width := helpPanelWidth(appWidth)
-	if width > 72 {
-		width = 72
-	}
-	if width < 46 {
-		width = 46
-	}
+func renderNamePrompt(s styles, dialogs config.Dialogs, title string, message string, action string, value string, appWidth int, appHeight int) string {
+	width := smallDialogWidth(dialogs, appWidth)
 	bodyWidth := width - 8
 	if bodyWidth < 20 {
 		bodyWidth = 20
@@ -3463,17 +3458,11 @@ func renderNamePrompt(s styles, title string, message string, action string, val
 		"",
 		s.popupAccent.Render("<enter>") + s.popupMuted.Render(" "+action) + s.popupBody.Render("   ") + s.popupAccent.Render("<esc>") + s.popupMuted.Render(" cancel"),
 	}
-	return renderCenteredTitledBox(title, "", strings.Join(lines, "\n"), width, len(lines)+4, 3, s)
+	return renderCenteredTitledBox(title, "", strings.Join(lines, "\n"), width, smallDialogHeight(dialogs, appHeight, len(lines)+4), 3, s)
 }
 
-func renderErrorPopup(s styles, message string, appWidth int) string {
-	width := helpPanelWidth(appWidth)
-	if width > 96 {
-		width = 96
-	}
-	if width < 46 {
-		width = 46
-	}
+func renderErrorPopup(s styles, dialogs config.Dialogs, message string, appWidth int, appHeight int) string {
+	width := smallDialogWidth(dialogs, appWidth)
 	bodyWidth := width - 8
 	if bodyWidth < 20 {
 		bodyWidth = 20
@@ -3481,17 +3470,11 @@ func renderErrorPopup(s styles, message string, appWidth int) string {
 	lines := wrapHelpDescription(message, bodyWidth)
 	lines = append(lines, "")
 	lines = append(lines, s.popupAccent.Render("<esc>")+s.popupMuted.Render(" dismiss")+s.popupBody.Render("   ")+s.popupAccent.Render("<c-r>")+s.popupMuted.Render(" retry/reload"))
-	return renderCenteredTitledBox("Error", "", strings.Join(lines, "\n"), width, len(lines)+4, 3, s)
+	return renderCenteredTitledBox("Error", "", strings.Join(lines, "\n"), width, smallDialogHeight(dialogs, appHeight, len(lines)+4), 3, s)
 }
 
-func renderPathNoticePopup(s styles, message string, appWidth int) string {
-	width := helpPanelWidth(appWidth)
-	if width > 96 {
-		width = 96
-	}
-	if width < 46 {
-		width = 46
-	}
+func renderPathNoticePopup(s styles, dialogs config.Dialogs, message string, appWidth int, appHeight int) string {
+	width := smallDialogWidth(dialogs, appWidth)
 	bodyWidth := width - 8
 	if bodyWidth < 20 {
 		bodyWidth = 20
@@ -3499,10 +3482,10 @@ func renderPathNoticePopup(s styles, message string, appWidth int) string {
 	lines := wrapHelpDescription(message, bodyWidth)
 	lines = append(lines, "")
 	lines = append(lines, s.popupAccent.Render("<enter>/<esc>")+s.popupMuted.Render(" dismiss"))
-	return renderCenteredTitledBox("Notice", "", strings.Join(lines, "\n"), width, len(lines)+4, 3, s)
+	return renderCenteredTitledBox("Notice", "", strings.Join(lines, "\n"), width, smallDialogHeight(dialogs, appHeight, len(lines)+4), 3, s)
 }
 
-func renderHelpPanel(s styles, previous mode, cursor int, scroll int, appWidth int, appHeight int) string {
+func renderHelpPanel(s styles, dialogs config.Dialogs, previous mode, cursor int, scroll int, appWidth int, appHeight int) string {
 	items := helpItemsForMode(previous)
 	if len(items) == 0 {
 		items = helpItemsForMode(modeBrowse)
@@ -3513,10 +3496,11 @@ func renderHelpPanel(s styles, previous mode, cursor int, scroll int, appWidth i
 	if cursor >= len(items) {
 		cursor = len(items) - 1
 	}
-	width := helpPanelWidth(appWidth)
+	frame := panelDialogFrame(dialogs, appWidth, appHeight)
+	width := frame.width
 	description := helpDescription(items[cursor])
 	descriptionLines := wrapHelpDescription(description, helpDescriptionTextWidth(width))
-	height := helpListHeight(appHeight)
+	height := helpListHeightForFrame(frame)
 	if scroll < 0 {
 		scroll = 0
 	}
@@ -3530,7 +3514,7 @@ func renderHelpPanel(s styles, previous mode, cursor int, scroll int, appWidth i
 		}
 	}
 
-	panelHeight := helpMainBoxHeight(appHeight)
+	panelHeight := panelMainBoxHeight(frame)
 	contentWidth := width - 2
 	horizontalPadding := 3
 	bodyWidth := contentWidth - horizontalPadding*2
@@ -3836,24 +3820,107 @@ func renderCenteredTitledBox(title string, bottomLabel string, content string, w
 	return b.String()
 }
 
-func helpPanelWidth(appWidth int) int {
+func normalizeUIDialogs(dialogs config.Dialogs) config.Dialogs {
+	if dialogs.Small.Width <= 0 {
+		dialogs.Small.Width = 72
+	}
+	if dialogs.Small.Height < 0 {
+		dialogs.Small.Height = 9
+	}
+	if dialogs.Panel.Width <= 0 {
+		dialogs.Panel.Width = 88
+	}
+	if dialogs.Panel.Height < 0 {
+		dialogs.Panel.Height = 0
+	}
+	return dialogs
+}
+
+func smallDialogWidth(dialogs config.Dialogs, appWidth int) int {
+	dialogs = normalizeUIDialogs(dialogs)
+	return dialogWidth(dialogs.Small.Width, appWidth, 20)
+}
+
+func smallDialogHeight(dialogs config.Dialogs, appHeight int, contentHeight int) int {
+	dialogs = normalizeUIDialogs(dialogs)
+	if dialogs.Small.Height == 0 {
+		return contentHeight
+	}
+	return dialogHeight(dialogs.Small.Height, appHeight, contentHeight)
+}
+
+func panelDialogFrame(dialogs config.Dialogs, appWidth int, appHeight int) dialogFrame {
+	dialogs = normalizeUIDialogs(dialogs)
+	return dialogFrame{
+		width:  panelDialogWidth(dialogs.Panel.Width, appWidth),
+		height: panelDialogHeight(dialogs.Panel.Height, appHeight),
+	}
+}
+
+func dialogWidth(target int, appWidth int, minWidth int) int {
+	if target <= 0 {
+		target = minWidth
+	}
+	width := target
+	if appWidth > 0 {
+		maxWidth := appWidth - 4
+		if maxWidth < minWidth {
+			maxWidth = appWidth
+		}
+		if maxWidth > 0 && width > maxWidth {
+			width = maxWidth
+		}
+	}
+	if width < minWidth {
+		width = minWidth
+	}
+	if appWidth > 0 && width > appWidth {
+		width = appWidth
+	}
+	return width
+}
+
+func dialogHeight(target int, appHeight int, contentHeight int) int {
+	height := target
+	if height < contentHeight {
+		height = contentHeight
+	}
+	if appHeight > 0 && height > appHeight {
+		height = appHeight
+	}
+	if height < 6 {
+		height = 6
+	}
+	return height
+}
+
+func panelDialogWidth(target int, appWidth int) int {
 	if appWidth <= 0 {
-		return 72
+		return target
 	}
 	width := appWidth - 8
-	if width > 88 {
-		width = 88
+	if width > target {
+		width = target
 	}
 	if width < 62 {
 		width = appWidth - 4
 	}
 	if width < 30 {
-		width = 30
+		width = appWidth
+	}
+	if width < 20 {
+		width = 20
+	}
+	if width > appWidth {
+		width = appWidth
 	}
 	return width
 }
 
-func helpPanelHeight(appHeight int) int {
+func panelDialogHeight(target int, appHeight int) int {
+	if target > 0 {
+		return dialogHeight(target, appHeight, 6)
+	}
 	if appHeight <= 0 {
 		return 18
 	}
@@ -3867,8 +3934,8 @@ func helpPanelHeight(appHeight int) int {
 	return height
 }
 
-func helpMainBoxHeight(appHeight int) int {
-	height := helpPanelHeight(appHeight) - 3
+func panelMainBoxHeight(frame dialogFrame) int {
+	height := frame.height - 3
 	if height < 6 {
 		height = 6
 	}
@@ -3885,16 +3952,16 @@ func helpTitle(previous mode) string {
 	return "Help"
 }
 
-func helpListHeight(appHeight int) int {
-	height := helpMainBoxHeight(appHeight) - 4
+func helpListHeightForFrame(frame dialogFrame) int {
+	height := panelMainBoxHeight(frame) - 4
 	if height < 4 {
 		height = 4
 	}
 	return height
 }
 
-func commandListHeight(appHeight int) int {
-	height := helpListHeight(appHeight) - 3
+func commandListHeightForFrame(frame dialogFrame) int {
+	height := helpListHeightForFrame(frame) - 3
 	if height < 3 {
 		height = 3
 	}

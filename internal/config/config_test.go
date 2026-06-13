@@ -36,6 +36,9 @@ func TestDefaultComesFromEmbeddedTOML(t *testing.T) {
 	if !cfg.UI.Columns.Chip.Show || cfg.UI.Columns.Chip.Width != 12 || cfg.UI.Columns.Chip.MaxWidth != 12 || !cfg.UI.Columns.Root.Show || cfg.UI.Columns.Root.Width != 12 || cfg.UI.Columns.Root.MaxWidth != 20 || !cfg.UI.Columns.Name.Show || cfg.UI.Columns.Name.Width != 28 || cfg.UI.Columns.Name.MaxWidth != 40 || !cfg.UI.Columns.Path.Show || cfg.UI.Columns.Path.MaxWidth != 0 {
 		t.Fatalf("column defaults not applied: %#v", cfg.UI.Columns)
 	}
+	if cfg.UI.Dialogs.Small.Width != 72 || cfg.UI.Dialogs.Small.Height != 9 || cfg.UI.Dialogs.Panel.Width != 88 || cfg.UI.Dialogs.Panel.Height != 0 {
+		t.Fatalf("dialog defaults not applied: %#v", cfg.UI.Dialogs)
+	}
 	if !cfg.Discovery.SkipHidden {
 		t.Fatalf("skip_hidden = false, want embedded default true")
 	}
@@ -92,6 +95,50 @@ glyph_color = "#d6a84f"
 	}
 	if cfg.Roots[0].GlyphColor != "#d6a84f" {
 		t.Fatalf("root glyph color = %q, want #d6a84f", cfg.Roots[0].GlyphColor)
+	}
+}
+
+func TestLoadFileReadsUIDialogs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeFile(t, path, `
+[ui.dialogs.small]
+width = 60
+height = 0
+
+[ui.dialogs.panel]
+width = 76
+height = 18
+`)
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile() error = %v", err)
+	}
+	if cfg.UI.Dialogs.Small.Width != 60 || cfg.UI.Dialogs.Small.Height != 0 {
+		t.Fatalf("small dialog = %#v, want width 60 height 0", cfg.UI.Dialogs.Small)
+	}
+	if cfg.UI.Dialogs.Panel.Width != 76 || cfg.UI.Dialogs.Panel.Height != 18 {
+		t.Fatalf("panel dialog = %#v, want width 76 height 18", cfg.UI.Dialogs.Panel)
+	}
+}
+
+func TestLoadFileKeepsPartialUIDialogDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeFile(t, path, `
+[ui.dialogs.small]
+width = 64
+
+[ui.dialogs.panel]
+height = 12
+`)
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile() error = %v", err)
+	}
+	if cfg.UI.Dialogs.Small.Width != 64 || cfg.UI.Dialogs.Small.Height != 9 {
+		t.Fatalf("small dialog = %#v, want overridden width and default height", cfg.UI.Dialogs.Small)
+	}
+	if cfg.UI.Dialogs.Panel.Width != 88 || cfg.UI.Dialogs.Panel.Height != 12 {
+		t.Fatalf("panel dialog = %#v, want default width and overridden height", cfg.UI.Dialogs.Panel)
 	}
 }
 

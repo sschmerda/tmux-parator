@@ -3,6 +3,14 @@ theme = "shades-of-purple"
 popup_width = "90%"
 popup_height = "90%"
 
+[ui.dialogs.small]
+width = 72
+height = 9
+
+[ui.dialogs.panel]
+width = 88
+height = 0
+
 [ui.glyphs]
 repo = ""
 subdir = ""

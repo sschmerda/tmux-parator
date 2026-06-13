@@ -25,9 +25,20 @@ type UI struct {
 	Theme       string      `toml:"theme"`
 	PopupWidth  string      `toml:"popup_width"`
 	PopupHeight string      `toml:"popup_height"`
+	Dialogs     Dialogs     `toml:"dialogs"`
 	Glyphs      Glyphs      `toml:"glyphs"`
 	GlyphColors GlyphColors `toml:"glyph_colors"`
 	Columns     Columns     `toml:"columns"`
+}
+
+type Dialogs struct {
+	Small DialogSize `toml:"small"`
+	Panel DialogSize `toml:"panel"`
+}
+
+type DialogSize struct {
+	Width  int `toml:"width"`
+	Height int `toml:"height"`
 }
 
 type Glyphs struct {
@@ -108,9 +119,20 @@ type rawUI struct {
 	Theme       string      `toml:"theme"`
 	PopupWidth  string      `toml:"popup_width"`
 	PopupHeight string      `toml:"popup_height"`
+	Dialogs     rawDialogs  `toml:"dialogs"`
 	Glyphs      Glyphs      `toml:"glyphs"`
 	GlyphColors GlyphColors `toml:"glyph_colors"`
 	Columns     rawColumns  `toml:"columns"`
+}
+
+type rawDialogs struct {
+	Small rawDialogSize `toml:"small"`
+	Panel rawDialogSize `toml:"panel"`
+}
+
+type rawDialogSize struct {
+	Width  *int `toml:"width"`
+	Height *int `toml:"height"`
 }
 
 type rawColumns struct {
@@ -247,6 +269,7 @@ func finalize(cfg Config) (Config, error) {
 	if cfg.UI.PopupHeight == "" {
 		cfg.UI.PopupHeight = "90%"
 	}
+	cfg.UI.Dialogs = normalizeDialogs(cfg.UI.Dialogs)
 	cfg.UI.Glyphs = normalizeGlyphs(cfg.UI.Glyphs)
 	cfg.UI.GlyphColors = normalizeGlyphColors(cfg.UI.GlyphColors)
 	cfg.UI.Columns = normalizeColumns(cfg.UI.Columns)
@@ -295,10 +318,45 @@ func normalizeUI(raw rawUI, fallback UI) UI {
 	if raw.PopupHeight != "" {
 		ui.PopupHeight = raw.PopupHeight
 	}
+	ui.Dialogs = mergeDialogs(raw.Dialogs, ui.Dialogs)
 	ui.Glyphs = mergeGlyphs(raw.Glyphs, ui.Glyphs)
 	ui.GlyphColors = mergeGlyphColors(raw.GlyphColors, ui.GlyphColors)
 	ui.Columns = mergeColumns(raw.Columns, ui.Columns)
 	return ui
+}
+
+func normalizeDialogs(dialogs Dialogs) Dialogs {
+	if dialogs.Small.Width <= 0 {
+		dialogs.Small.Width = 72
+	}
+	if dialogs.Small.Height < 0 {
+		dialogs.Small.Height = 9
+	}
+	if dialogs.Panel.Width <= 0 {
+		dialogs.Panel.Width = 88
+	}
+	if dialogs.Panel.Height < 0 {
+		dialogs.Panel.Height = 0
+	}
+	return dialogs
+}
+
+func mergeDialogs(raw rawDialogs, fallback Dialogs) Dialogs {
+	dialogs := fallback
+	dialogs.Small = mergeDialogSize(raw.Small, dialogs.Small)
+	dialogs.Panel = mergeDialogSize(raw.Panel, dialogs.Panel)
+	return dialogs
+}
+
+func mergeDialogSize(raw rawDialogSize, fallback DialogSize) DialogSize {
+	size := fallback
+	if raw.Width != nil {
+		size.Width = *raw.Width
+	}
+	if raw.Height != nil {
+		size.Height = *raw.Height
+	}
+	return size
 }
 
 func mergeGlyphs(raw Glyphs, fallback Glyphs) Glyphs {
