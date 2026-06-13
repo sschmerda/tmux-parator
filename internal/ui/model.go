@@ -62,6 +62,7 @@ type Model struct {
 	glyphColors          config.GlyphColors
 	columns              config.Columns
 	dialogs              config.Dialogs
+	keys                 config.KeyBindings
 	sessions             []tmux.Session
 	rootItems            []discovery.Candidate
 	candidates           []candidate
@@ -189,9 +190,16 @@ type styles struct {
 }
 
 func NewModel(client sessionClient, activeTheme theme.Theme, roots []config.Root, discoveryOptions discovery.Options, pathSearch config.PathSearch, glyphs config.Glyphs, glyphColors config.GlyphColors, columns config.Columns, dialogs ...config.Dialogs) Model {
+	return NewModelWithKeys(client, activeTheme, roots, discoveryOptions, pathSearch, glyphs, glyphColors, columns, config.Default().UI.Keys, dialogs...)
+}
+
+func NewModelWithKeys(client sessionClient, activeTheme theme.Theme, roots []config.Root, discoveryOptions discovery.Options, pathSearch config.PathSearch, glyphs config.Glyphs, glyphColors config.GlyphColors, columns config.Columns, keys config.KeyBindings, dialogs ...config.Dialogs) Model {
 	glyphs = normalizeUIGlyphs(glyphs)
 	glyphColors = normalizeUIGlyphColors(glyphColors)
 	columns = normalizeUIColumns(columns)
+	if keyBindingsEmpty(keys) {
+		keys = config.Default().UI.Keys
+	}
 	dialogConfig := config.Dialogs{}
 	if len(dialogs) > 0 {
 		dialogConfig = dialogs[0]
@@ -205,6 +213,7 @@ func NewModel(client sessionClient, activeTheme theme.Theme, roots []config.Root
 		glyphColors: glyphColors,
 		columns:     columns,
 		dialogs:     dialogConfig,
+		keys:        keys,
 		pathConfig: pathsearchConfig{
 			enabled: pathSearch.Enabled,
 			roots:   pathSearch.Roots,
@@ -220,6 +229,24 @@ func NewModel(client sessionClient, activeTheme theme.Theme, roots []config.Root
 		loading: true,
 		styles:  newStyles(activeTheme),
 	}
+}
+
+func keyBindingsEmpty(keys config.KeyBindings) bool {
+	return len(keys.Browse.Quit) == 0 &&
+		len(keys.PathSearch.Close) == 0 &&
+		len(keys.Commands.Close) == 0 &&
+		len(keys.Help.Close) == 0 &&
+		len(keys.Confirm.Yes) == 0
+}
+
+func keyMatches(msg tea.KeyMsg, keys []string) bool {
+	value := msg.String()
+	for _, key := range keys {
+		if value == key {
+			return true
+		}
+	}
+	return false
 }
 
 func newStyles(activeTheme theme.Theme) styles {
@@ -396,19 +423,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == "esc" {
+	if keyMatches(msg, dismissKeys(m.keys.Browse.Quit)) || keyMatches(msg, dismissKeys(m.keys.PathSearch.Close)) || keyMatches(msg, dismissKeys(m.keys.Commands.Close)) || keyMatches(msg, dismissKeys(m.keys.Help.Close)) || keyMatches(msg, dismissKeys(m.keys.Confirm.No)) {
 		if m.clearVisibleError() {
 			return m, nil
 		}
 	}
 	if m.notice != nil {
-		if msg.String() == "enter" {
+		if keyMatches(msg, m.keys.Browse.OpenSelected) || keyMatches(msg, dismissKeys(m.keys.Browse.Quit)) {
 			m.notice = nil
 		}
 		return m, nil
 	}
 	if m.showsPathSearchBase() && m.pathNotice != nil {
-		if msg.String() == "enter" {
+		if keyMatches(msg, m.keys.PathSearch.OpenSelected) || keyMatches(msg, dismissKeys(m.keys.PathSearch.Close)) {
 			m.pathNotice = nil
 		}
 		return m, nil
@@ -417,16 +444,16 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateCommandKey(msg)
 	}
 	if m.mode == modeHelp {
-		switch msg.String() {
-		case "esc", "ctrl+_":
+		switch {
+		case keyMatches(msg, m.keys.Help.Close):
 			m.mode = m.previousMode
-		case "up", "k":
+		case keyMatches(msg, m.keys.Help.Up):
 			if m.helpCursor > 0 {
 				m.helpCursor--
 				m.ensureHelpCursorVisible()
 			}
-		case "down", "j":
-			if m.helpCursor < len(helpItemsForMode(m.previousMode))-1 {
+		case keyMatches(msg, m.keys.Help.Down):
+			if m.helpCursor < len(m.helpItemsForMode(m.previousMode))-1 {
 				m.helpCursor++
 				m.ensureHelpCursorVisible()
 			}
@@ -440,18 +467,18 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateRenameKey(msg)
 	}
 	if m.mode == modeConfirmCreatePath {
-		switch msg.String() {
-		case "y", "Y":
+		switch {
+		case keyMatches(msg, m.keys.Confirm.Yes):
 			return m.confirmCreateTypedPath()
-		case "n", "N", "esc":
+		case keyMatches(msg, m.keys.Confirm.No):
 			m.mode = modePathSearch
 			m.confirmChoice = confirmCancel
 			return m, nil
-		case "left", "up", "shift+tab":
+		case keyMatches(msg, m.keys.Confirm.Left):
 			m.confirmChoice = confirmCancel
-		case "right", "down", "tab":
+		case keyMatches(msg, m.keys.Confirm.Right):
 			m.confirmChoice = confirmYes
-		case "enter":
+		case keyMatches(msg, m.keys.Confirm.Submit):
 			if m.confirmChoice == confirmYes {
 				return m.confirmCreateTypedPath()
 			}
@@ -465,17 +492,17 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updatePathSearchKey(msg)
 	}
 	if m.mode == modeConfirmKill {
-		switch msg.String() {
-		case "y", "Y":
+		switch {
+		case keyMatches(msg, m.keys.Confirm.Yes):
 			return m.confirmKill()
-		case "n", "N", "esc":
+		case keyMatches(msg, m.keys.Confirm.No):
 			m.mode = modeBrowse
 			return m, nil
-		case "left", "up", "shift+tab":
+		case keyMatches(msg, m.keys.Confirm.Left):
 			m.confirmChoice = confirmCancel
-		case "right", "down", "tab":
+		case keyMatches(msg, m.keys.Confirm.Right):
 			m.confirmChoice = confirmYes
-		case "enter":
+		case keyMatches(msg, m.keys.Confirm.Submit):
 			if m.confirmChoice == confirmYes {
 				return m.confirmKill()
 			}
@@ -485,62 +512,62 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	switch msg.String() {
-	case "ctrl+c", "esc":
+	switch {
+	case keyMatches(msg, m.keys.Browse.Quit):
 		return m, tea.Quit
-	case "ctrl+g":
+	case keyMatches(msg, m.keys.Browse.CommandPalette):
 		m.openCommands(m.mode)
-	case "ctrl+@":
+	case keyMatches(msg, m.keys.Browse.OpenLastSession):
 		return m, m.switchLastSession()
-	case "ctrl+_":
+	case keyMatches(msg, m.keys.Browse.Help):
 		m.openHelp(m.mode)
-	case "ctrl+r":
+	case keyMatches(msg, m.keys.Browse.Reload):
 		m.loading = true
 		return m, tea.Batch(m.loadSessions(), m.loadRoots())
-	case "ctrl+n":
+	case keyMatches(msg, m.keys.Browse.RenameSession):
 		return m.openRenameSession()
-	case "ctrl+s":
+	case keyMatches(msg, m.keys.Browse.NewSession):
 		m.openCreateSession()
-	case "ctrl+t":
+	case keyMatches(msg, m.keys.Browse.PathSearch):
 		return m.openPathSearch()
-	case "alt+h", "meta+h":
+	case keyMatches(msg, m.keys.Browse.ToggleHidden):
 		m.toggleDiscoveryHidden()
 		m.loading = true
 		return m, m.loadRoots()
-	case "alt+i", "meta+i":
+	case keyMatches(msg, m.keys.Browse.ToggleIgnored):
 		m.toggleDiscoveryGitignored()
 		m.loading = true
 		return m, m.loadRoots()
-	case "up":
+	case keyMatches(msg, m.keys.Browse.Up):
 		if m.cursor > 0 {
 			m.cursor--
 			m.ensureCursorVisible()
 		}
-	case "down":
+	case keyMatches(msg, m.keys.Browse.Down):
 		if m.cursor < len(m.filtered)-1 {
 			m.cursor++
 			m.ensureCursorVisible()
 		}
-	case "tab":
+	case keyMatches(msg, m.keys.Browse.JumpNextSection):
 		m.jumpBrowseSection(1)
-	case "shift+tab":
+	case keyMatches(msg, m.keys.Browse.JumpPreviousSection):
 		m.jumpBrowseSection(-1)
-	case "enter":
+	case keyMatches(msg, m.keys.Browse.OpenSelected):
 		selected, ok := m.selected()
 		if !ok {
 			return m, nil
 		}
 		return m, m.openCandidate(selected)
-	case "ctrl+k":
+	case keyMatches(msg, m.keys.Browse.KillSession):
 		if selected, ok := m.selected(); ok && selected.kind == candidateSession {
 			m.mode = modeConfirmKill
 			m.confirmChoice = confirmCancel
 		}
-	case "backspace", "ctrl+h":
+	case keyMatches(msg, m.keys.Browse.DeleteChar):
 		m.removeBrowseFilterRune()
-	case "alt+backspace":
+	case keyMatches(msg, m.keys.Browse.DeleteWord):
 		m.removeBrowseFilterWord()
-	case "ctrl+u", "meta+backspace":
+	case keyMatches(msg, m.keys.Browse.ClearInput):
 		m.clearBrowseFilter()
 	default:
 		if len(msg.String()) == 1 && !msg.Alt {
@@ -553,33 +580,33 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) updateCommandKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	items := m.commandMatches()
-	switch msg.String() {
-	case "esc", "ctrl+g":
+	switch {
+	case keyMatches(msg, m.keys.Commands.Close):
 		m.mode = m.commandPreviousMode
-	case "ctrl+_":
+	case keyMatches(msg, m.keys.Commands.Help):
 		m.openHelp(m.mode)
-	case "up":
+	case keyMatches(msg, m.keys.Commands.Up):
 		if m.commandCursor > 0 {
 			m.commandCursor--
 			m.ensureCommandCursorVisible()
 		}
-	case "down":
+	case keyMatches(msg, m.keys.Commands.Down):
 		if m.commandCursor < len(items)-1 {
 			m.commandCursor++
 			m.ensureCommandCursorVisible()
 		}
-	case "enter":
+	case keyMatches(msg, m.keys.Commands.RunSelected):
 		if len(items) == 0 || m.commandCursor < 0 || m.commandCursor >= len(items) {
 			return m, nil
 		}
 		return m.runCommand(items[m.commandCursor].item)
-	case "backspace", "ctrl+h":
+	case keyMatches(msg, m.keys.Commands.DeleteChar):
 		m.commandInput = deleteLastRune(m.commandInput)
 		m.clampCommandCursor()
-	case "alt+backspace":
+	case keyMatches(msg, m.keys.Commands.DeleteWord):
 		m.commandInput = deleteLastShellWord(m.commandInput)
 		m.clampCommandCursor()
-	case "ctrl+u", "meta+backspace":
+	case keyMatches(msg, m.keys.Commands.ClearInput):
 		m.commandInput = ""
 		m.clampCommandCursor()
 	default:
@@ -592,13 +619,13 @@ func (m Model) updateCommandKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateCreateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
+	switch {
+	case keyMatches(msg, m.keys.Browse.Quit):
 		m.mode = modeBrowse
 		m.createText = ""
 		m.createPath = ""
 		m.createMetadata = tmux.SessionMetadata{}
-	case "enter":
+	case keyMatches(msg, m.keys.Browse.OpenSelected):
 		name := strings.TrimSpace(m.createText)
 		if name == "" {
 			m.notice = fmt.Errorf("session name is empty")
@@ -621,11 +648,11 @@ func (m Model) updateCreateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.createPath = ""
 		m.createMetadata = tmux.SessionMetadata{}
 		return m, m.createSessionWithMetadata(name, path, metadata)
-	case "backspace", "ctrl+h":
+	case keyMatches(msg, m.keys.Browse.DeleteChar):
 		m.createText = deleteLastRune(m.createText)
-	case "alt+backspace":
+	case keyMatches(msg, m.keys.Browse.DeleteWord):
 		m.createText = deleteLastShellWord(m.createText)
-	case "ctrl+u", "meta+backspace":
+	case keyMatches(msg, m.keys.Browse.ClearInput):
 		m.createText = ""
 	default:
 		if len(msg.Runes) > 0 {
@@ -636,12 +663,12 @@ func (m Model) updateCreateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
+	switch {
+	case keyMatches(msg, m.keys.Browse.Quit):
 		m.mode = modeBrowse
 		m.renameText = ""
 		m.renameOriginal = ""
-	case "enter":
+	case keyMatches(msg, m.keys.Browse.OpenSelected):
 		name := strings.TrimSpace(m.renameText)
 		if name == "" {
 			m.notice = fmt.Errorf("session name is empty")
@@ -663,11 +690,11 @@ func (m Model) updateRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.renameText = ""
 		m.renameOriginal = ""
 		return m, m.renameSession(original, name)
-	case "backspace", "ctrl+h":
+	case keyMatches(msg, m.keys.Browse.DeleteChar):
 		m.renameText = deleteLastRune(m.renameText)
-	case "alt+backspace":
+	case keyMatches(msg, m.keys.Browse.DeleteWord):
 		m.renameText = deleteLastShellWord(m.renameText)
-	case "ctrl+u", "meta+backspace":
+	case keyMatches(msg, m.keys.Browse.ClearInput):
 		m.renameText = ""
 	default:
 		if len(msg.Runes) > 0 {
@@ -678,43 +705,39 @@ func (m Model) updateRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updatePathSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "ctrl+t":
+	switch {
+	case keyMatches(msg, m.keys.PathSearch.Close):
 		m.stopPathStream()
 		m.mode = modeBrowse
 		return m, nil
-	case "esc":
-		m.stopPathStream()
-		m.mode = modeBrowse
-		return m, nil
-	case "ctrl+g":
+	case keyMatches(msg, m.keys.PathSearch.CommandPalette):
 		m.openCommands(modePathSearch)
 		return m, nil
-	case "ctrl+@":
+	case keyMatches(msg, m.keys.PathSearch.OpenLastSession):
 		m.stopPathStream()
 		m.mode = modeBrowse
 		return m, m.switchLastSession()
-	case "ctrl+_":
+	case keyMatches(msg, m.keys.PathSearch.Help):
 		m.openHelp(modePathSearch)
 		return m, nil
-	case "ctrl+r":
+	case keyMatches(msg, m.keys.PathSearch.Reload):
 		m.pathBusy = true
 		m.clearPathCompletion()
 		return m, m.startPathStream(m.pathRoot)
-	case "ctrl+o":
+	case keyMatches(msg, m.keys.PathSearch.CycleRoot):
 		m.cyclePathRoot()
 		return m, m.startPathStream(m.pathRoot)
-	case "alt+h", "meta+h":
+	case keyMatches(msg, m.keys.PathSearch.ToggleHidden):
 		m.pathConfig.options.SkipHidden = !m.pathConfig.options.SkipHidden
 		m.pathBusy = true
 		m.clearPathCompletion()
 		return m, m.startPathStream(m.pathRoot)
-	case "alt+i", "meta+i":
+	case keyMatches(msg, m.keys.PathSearch.ToggleIgnored):
 		m.pathConfig.options.SkipGitignored = !m.pathConfig.options.SkipGitignored
 		m.pathBusy = true
 		m.clearPathCompletion()
 		return m, m.startPathStream(m.pathRoot)
-	case "ctrl+p":
+	case keyMatches(msg, m.keys.PathSearch.OpenTyped):
 		selected, ok := m.typedPathCandidate()
 		if !ok {
 			m.pathErr = errPathInputUnavailable(m.pathInput)
@@ -725,39 +748,35 @@ func (m Model) updatePathSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.stopPathStream()
 		m.mode = modeBrowse
 		return m, m.openCandidate(selected)
-	case "ctrl+a":
+	case keyMatches(msg, m.keys.PathSearch.CreateTyped):
 		return m.openCreateTypedPathConfirmation()
-	case "tab":
+	case keyMatches(msg, m.keys.PathSearch.CompleteNext):
 		if m.hasPathCompletionCycle() {
 			m.advancePathCompletion(1)
 			return m, m.startPathStreamPreserveCompletion(m.pathRoot)
 		}
 		return m, m.loadPathCompletions(1)
-	case "shift+tab":
+	case keyMatches(msg, m.keys.PathSearch.CompletePrevious):
 		if m.hasPathCompletionCycle() {
 			m.advancePathCompletion(-1)
 			return m, m.startPathStreamPreserveCompletion(m.pathRoot)
 		}
 		return m, m.loadPathCompletions(-1)
-	case "right":
+	case keyMatches(msg, m.keys.PathSearch.AcceptCompletion):
 		if m.hasPathCompletionCycle() {
 			m.clearPathCompletion()
 		}
-	case "left":
-		if m.hasPathCompletionCycle() {
-			m.clearPathCompletion()
-		}
-	case "up":
+	case keyMatches(msg, m.keys.PathSearch.Up):
 		if m.pathCursor > 0 {
 			m.pathCursor--
 			m.ensurePathCursorVisible()
 		}
-	case "down":
+	case keyMatches(msg, m.keys.PathSearch.Down):
 		if m.pathCursor < len(m.pathResult)-1 {
 			m.pathCursor++
 			m.ensurePathCursorVisible()
 		}
-	case "enter":
+	case keyMatches(msg, m.keys.PathSearch.OpenSelected):
 		selected, ok := m.selectedPath()
 		if !ok {
 			return m, nil
@@ -766,11 +785,11 @@ func (m Model) updatePathSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.stopPathStream()
 		m.mode = modeBrowse
 		return m, m.openCandidate(selected)
-	case "backspace", "ctrl+h":
+	case keyMatches(msg, m.keys.PathSearch.DeleteChar):
 		return m.updatePathInput(deleteLastRune(m.pathInput))
-	case "alt+backspace":
+	case keyMatches(msg, m.keys.PathSearch.DeleteWord):
 		return m.updatePathInput(deleteLastShellWord(m.pathInput))
-	case "ctrl+u", "meta+backspace":
+	case keyMatches(msg, m.keys.PathSearch.ClearInput):
 		return m.updatePathInput("")
 	default:
 		if len(msg.String()) == 1 && !msg.Alt {
@@ -938,31 +957,31 @@ func (m Model) renderWithOverlay(content string) string {
 	innerHeight := m.innerHeight()
 	base := m.styles.root.Width(innerWidth).Height(innerHeight).Render(content)
 	if m.mode == modeConfirmKill {
-		base = placeCenteredOverlay(base, renderConfirmKill(m.styles, m.dialogs, m.confirmKillSessionName(), m.confirmChoice, innerWidth, innerHeight), innerWidth, innerHeight)
+		base = placeCenteredOverlay(base, renderConfirmKillWithKeys(m.styles, m.dialogs, m.keys, m.confirmKillSessionName(), m.confirmChoice, innerWidth, innerHeight), innerWidth, innerHeight)
 	}
 	if m.mode == modeConfirmCreatePath {
-		base = placeCenteredOverlay(base, renderConfirmCreatePath(m.styles, m.dialogs, m.createPathInput, m.confirmChoice, innerWidth, innerHeight), innerWidth, innerHeight)
+		base = placeCenteredOverlay(base, renderConfirmCreatePathWithKeys(m.styles, m.dialogs, m.keys, m.createPathInput, m.confirmChoice, innerWidth, innerHeight), innerWidth, innerHeight)
 	}
 	if m.mode == modeCreateSession {
-		base = placeCenteredOverlay(base, renderCreateSession(m.styles, m.dialogs, m.createText, innerWidth, innerHeight), innerWidth, innerHeight)
+		base = placeCenteredOverlay(base, renderCreateSessionWithKeys(m.styles, m.dialogs, m.keys, m.createText, innerWidth, innerHeight), innerWidth, innerHeight)
 	}
 	if m.mode == modeRenameSession {
-		base = placeCenteredOverlay(base, renderRenameSession(m.styles, m.dialogs, m.renameText, innerWidth, innerHeight), innerWidth, innerHeight)
+		base = placeCenteredOverlay(base, renderRenameSessionWithKeys(m.styles, m.dialogs, m.keys, m.renameText, innerWidth, innerHeight), innerWidth, innerHeight)
 	}
 	if m.mode == modeCommands || (m.mode == modeHelp && m.previousMode == modeCommands) {
 		base = placeOverlay(base, renderCommandPalette(m.styles, m.dialogs, m.commandMatches(), m.commandInput, m.commandCursor, m.commandScroll, innerWidth, innerHeight), innerWidth, innerHeight)
 	}
 	if m.mode == modeHelp {
-		base = placeOverlay(base, renderHelpPanel(m.styles, m.dialogs, m.previousMode, m.helpCursor, m.helpScroll, innerWidth, innerHeight), innerWidth, innerHeight)
+		base = placeOverlay(base, renderHelpPanelWithKeys(m.styles, m.dialogs, m.keys, m.previousMode, m.helpCursor, m.helpScroll, innerWidth, innerHeight), innerWidth, innerHeight)
 	}
 	if m.notice != nil {
-		base = placeCenteredOverlay(base, renderPathNoticePopup(m.styles, m.dialogs, m.notice.Error(), innerWidth, innerHeight), innerWidth, innerHeight)
+		base = placeCenteredOverlay(base, renderPathNoticePopupWithKeys(m.styles, m.dialogs, m.keys.Browse.OpenSelected, dismissKeys(m.keys.Browse.Quit), m.notice.Error(), innerWidth, innerHeight), innerWidth, innerHeight)
 	}
 	if m.showsPathSearchBase() && m.pathNotice != nil {
-		base = placeCenteredOverlay(base, renderPathNoticePopup(m.styles, m.dialogs, m.pathNotice.Error(), innerWidth, innerHeight), innerWidth, innerHeight)
+		base = placeCenteredOverlay(base, renderPathNoticePopupWithKeys(m.styles, m.dialogs, m.keys.PathSearch.OpenSelected, dismissKeys(m.keys.PathSearch.Close), m.pathNotice.Error(), innerWidth, innerHeight), innerWidth, innerHeight)
 	}
 	if message, ok := m.errorMessage(); ok {
-		base = placeCenteredOverlay(base, renderErrorPopup(m.styles, m.dialogs, message, innerWidth, innerHeight), innerWidth, innerHeight)
+		base = placeCenteredOverlay(base, renderErrorPopupWithKeys(m.styles, m.dialogs, dismissKeys(m.keys.Browse.Quit), m.keys.Browse.Reload, message, innerWidth, innerHeight), innerWidth, innerHeight)
 	}
 	return m.styles.appFrame.Width(innerWidth).Height(innerHeight).Render(base)
 }
@@ -3147,7 +3166,7 @@ func (item commandItem) fuzzyCandidate() fuzzy.Candidate {
 
 func (m Model) commandItems() []commandItem {
 	if m.commandPreviousMode == modePathSearch {
-		specs := pathSearchCommandSpecs()
+		specs := m.pathSearchCommandSpecs()
 		typedReason := ""
 		if _, ok := m.typedPathCandidate(); !ok {
 			typedReason = "The typed prompt is not an existing directory."
@@ -3168,7 +3187,7 @@ func (m Model) commandItems() []commandItem {
 			commandItemFromSpec(specs[8], true, ""),
 		}
 	}
-	specs := browseCommandSpecs()
+	specs := m.browseCommandSpecs()
 	selected, ok := m.selected()
 	killReason := ""
 	sessionReason := ""
@@ -3221,33 +3240,103 @@ func helpItemFromSpec(spec commandSpec) helpItem {
 }
 
 func pathSearchCommandSpecs() []commandSpec {
+	return pathSearchCommandSpecsFor(config.Default().UI.Keys)
+}
+
+func (m Model) pathSearchCommandSpecs() []commandSpec {
+	return pathSearchCommandSpecsFor(m.keys)
+}
+
+func pathSearchCommandSpecsFor(keys config.KeyBindings) []commandSpec {
 	return []commandSpec{
-		{ID: commandOpenSelected, Title: "Open selected result", Key: "<enter>", Description: "Create or switch to a tmux session for the selected fuzzy path result."},
-		{ID: commandOpenTyped, Title: "Open typed path", Key: "<c-p>", Description: "Open the exact typed prompt path when it exists as a directory."},
-		{ID: commandCreateTyped, Title: "Add typed path", Key: "<c-a>", Description: "Create the exact typed prompt path after confirmation, then create or switch to its tmux session."},
-		{ID: commandCycleRoot, Title: "Cycle prompt root", Key: "<c-o>", Description: "Cycle the path prompt through ~/ / ./ ../."},
-		{ID: commandToggleHidden, Title: "Toggle hidden path results", Key: "<meta-h>", Description: "Toggle whether hidden directories are skipped in the current path search."},
-		{ID: commandToggleIgnored, Title: "Toggle gitignored path results", Key: "<meta-i>", Description: "Toggle whether gitignored directories are skipped in the current path search."},
-		{ID: commandReload, Title: "Reload path search", Key: "<c-r>", Description: "Restart the current streamed path search."},
-		{ID: commandHelp, Title: "Show help", Key: "<c-?>", Description: "Show help for the command palette."},
-		{ID: commandQuit, Title: "Quit", Key: "<esc>", Description: "Quit tmux-parator."},
+		{ID: commandOpenSelected, Title: "Open selected result", Key: keyListLabel(keys.PathSearch.OpenSelected), Description: "Create or switch to a tmux session for the selected fuzzy path result."},
+		{ID: commandOpenTyped, Title: "Open typed path", Key: keyListLabel(keys.PathSearch.OpenTyped), Description: "Open the exact typed prompt path when it exists as a directory."},
+		{ID: commandCreateTyped, Title: "Add typed path", Key: keyListLabel(keys.PathSearch.CreateTyped), Description: "Create the exact typed prompt path after confirmation, then create or switch to its tmux session."},
+		{ID: commandCycleRoot, Title: "Cycle prompt root", Key: keyListLabel(keys.PathSearch.CycleRoot), Description: "Cycle the path prompt through ~/ / ./ ../."},
+		{ID: commandToggleHidden, Title: "Toggle hidden path results", Key: keyListLabel(keys.PathSearch.ToggleHidden), Description: "Toggle whether hidden directories are skipped in the current path search."},
+		{ID: commandToggleIgnored, Title: "Toggle gitignored path results", Key: keyListLabel(keys.PathSearch.ToggleIgnored), Description: "Toggle whether gitignored directories are skipped in the current path search."},
+		{ID: commandReload, Title: "Reload path search", Key: keyListLabel(keys.PathSearch.Reload), Description: "Restart the current streamed path search."},
+		{ID: commandHelp, Title: "Show help", Key: keyListLabel(keys.PathSearch.Help), Description: "Show help for the command palette."},
+		{ID: commandQuit, Title: "Quit", Key: keyListLabel(keys.PathSearch.Close), Description: "Quit tmux-parator."},
 	}
 }
 
 func browseCommandSpecs() []commandSpec {
+	return browseCommandSpecsFor(config.Default().UI.Keys)
+}
+
+func (m Model) browseCommandSpecs() []commandSpec {
+	return browseCommandSpecsFor(m.keys)
+}
+
+func browseCommandSpecsFor(keys config.KeyBindings) []commandSpec {
 	return []commandSpec{
-		{ID: commandOpenSelected, Title: "Open selected", Key: "<enter>", Description: "Switch to an existing session or create one for the selected root."},
-		{ID: commandOpenLast, Title: "Open last session", Key: "<c-`>", Description: "Switch to tmux's last active session."},
-		{ID: commandKillSession, Title: "Kill selected session", Key: "<c-k>", Description: "Ask for confirmation before killing the selected tmux session."},
-		{ID: commandRenameSession, Title: "Rename selected session", Key: "<c-n>", Description: "Rename the selected open tmux session."},
-		{ID: commandNewSession, Title: "Create named session", Key: "<c-s>", Description: "Create a new named tmux session from the selected row's path and kind."},
-		{ID: commandPathSearch, Title: "Create session from path", Key: "<c-t>", Description: "Open filesystem path search, then create or switch to a session for the selected path."},
-		{ID: commandToggleHidden, Title: "Toggle hidden configured paths", Key: "<meta-h>", Description: "Toggle whether hidden directories are skipped for configured repos and subdirs."},
-		{ID: commandToggleIgnored, Title: "Toggle gitignored configured paths", Key: "<meta-i>", Description: "Toggle whether gitignored directories are skipped for configured repos and subdirs."},
-		{ID: commandReload, Title: "Reload", Key: "<c-r>", Description: "Reload tmux sessions and configured root candidates."},
-		{ID: commandHelp, Title: "Show help", Key: "<c-?>", Description: "Show help for the command palette."},
-		{ID: commandQuit, Title: "Quit", Key: "<esc>", Description: "Quit tmux-parator."},
+		{ID: commandOpenSelected, Title: "Open selected", Key: keyListLabel(keys.Browse.OpenSelected), Description: "Switch to an existing session or create one for the selected root."},
+		{ID: commandOpenLast, Title: "Open last session", Key: keyListLabel(keys.Browse.OpenLastSession), Description: "Switch to tmux's last active session."},
+		{ID: commandKillSession, Title: "Kill selected session", Key: keyListLabel(keys.Browse.KillSession), Description: "Ask for confirmation before killing the selected tmux session."},
+		{ID: commandRenameSession, Title: "Rename selected session", Key: keyListLabel(keys.Browse.RenameSession), Description: "Rename the selected open tmux session."},
+		{ID: commandNewSession, Title: "Create named session", Key: keyListLabel(keys.Browse.NewSession), Description: "Create a new named tmux session from the selected row's path and kind."},
+		{ID: commandPathSearch, Title: "Create session from path", Key: keyListLabel(keys.Browse.PathSearch), Description: "Open filesystem path search, then create or switch to a session for the selected path."},
+		{ID: commandToggleHidden, Title: "Toggle hidden configured paths", Key: keyListLabel(keys.Browse.ToggleHidden), Description: "Toggle whether hidden directories are skipped for configured repos and subdirs."},
+		{ID: commandToggleIgnored, Title: "Toggle gitignored configured paths", Key: keyListLabel(keys.Browse.ToggleIgnored), Description: "Toggle whether gitignored directories are skipped for configured repos and subdirs."},
+		{ID: commandReload, Title: "Reload", Key: keyListLabel(keys.Browse.Reload), Description: "Reload tmux sessions and configured root candidates."},
+		{ID: commandHelp, Title: "Show help", Key: keyListLabel(keys.Browse.Help), Description: "Show help for the command palette."},
+		{ID: commandQuit, Title: "Quit", Key: keyListLabel(keys.Browse.Quit), Description: "Quit tmux-parator."},
 	}
+}
+
+func combinedKeyLabel(first []string, second []string) string {
+	if len(first) == 1 && len(second) == 1 {
+		return keyLabel(first[0]) + "/" + keyLabel(second[0])
+	}
+	return keyListLabel(append(append([]string(nil), first...), second...))
+}
+
+func keyListLabel(keys []string) string {
+	labels := make([]string, 0, len(keys))
+	for _, key := range keys {
+		labels = append(labels, keyLabel(key))
+	}
+	return strings.Join(labels, "/")
+}
+
+func keyLabel(key string) string {
+	switch key {
+	case "ctrl+@":
+		return "<c-`>"
+	case "ctrl+_":
+		return "<c-?>"
+	case "shift+tab":
+		return "<s-tab>"
+	case "esc", "enter", "tab", "backspace", "alt+backspace", "meta+backspace", "up", "down", "left", "right":
+		return "<" + key + ">"
+	}
+	for _, prefix := range []struct {
+		raw   string
+		label string
+	}{
+		{raw: "ctrl+", label: "c-"},
+		{raw: "alt+", label: "alt-"},
+		{raw: "meta+", label: "meta-"},
+	} {
+		if strings.HasPrefix(key, prefix.raw) {
+			return "<" + prefix.label + strings.TrimPrefix(key, prefix.raw) + ">"
+		}
+	}
+	return key
+}
+
+func dismissKeys(keys []string) []string {
+	var filtered []string
+	for _, key := range keys {
+		if key == "esc" {
+			filtered = append(filtered, key)
+		}
+	}
+	if len(filtered) > 0 {
+		return filtered
+	}
+	return keys
 }
 
 func (m Model) commandMatches() []commandMatch {
@@ -3483,6 +3572,10 @@ func renderCommandRow(match commandMatch, selected bool, s styles, width int) st
 }
 
 func renderConfirmKill(s styles, dialogs config.Dialogs, sessionName string, choice confirmChoice, appWidth int, appHeight int) string {
+	return renderConfirmKillWithKeys(s, dialogs, config.Default().UI.Keys, sessionName, choice, appWidth, appHeight)
+}
+
+func renderConfirmKillWithKeys(s styles, dialogs config.Dialogs, keys config.KeyBindings, sessionName string, choice confirmChoice, appWidth int, appHeight int) string {
 	width := smallDialogWidth(dialogs, appWidth)
 	bodyWidth := width - 8
 	if bodyWidth < 20 {
@@ -3494,11 +3587,15 @@ func renderConfirmKill(s styles, dialogs config.Dialogs, sessionName string, cho
 	message := "Kill tmux session " + strconv.Quote(sessionName) + "?"
 	lines := wrapHelpDescription(message, bodyWidth)
 	lines = append(lines, "")
-	lines = append(lines, renderConfirmAction("Cancel", "n/<esc>", choice == confirmCancel, s)+s.popupBody.Render("   ")+renderConfirmAction("Confirm", "y", choice == confirmYes, s))
+	lines = append(lines, renderConfirmAction("Cancel", keyListLabel(keys.Confirm.No), choice == confirmCancel, s)+s.popupBody.Render("   ")+renderConfirmAction("Confirm", keyListLabel(keys.Confirm.Yes), choice == confirmYes, s))
 	return renderCenteredTitledBox("Confirm", "", strings.Join(lines, "\n"), width, smallDialogHeight(dialogs, appHeight, len(lines)+4), 3, s)
 }
 
 func renderConfirmCreatePath(s styles, dialogs config.Dialogs, pathInput string, choice confirmChoice, appWidth int, appHeight int) string {
+	return renderConfirmCreatePathWithKeys(s, dialogs, config.Default().UI.Keys, pathInput, choice, appWidth, appHeight)
+}
+
+func renderConfirmCreatePathWithKeys(s styles, dialogs config.Dialogs, keys config.KeyBindings, pathInput string, choice confirmChoice, appWidth int, appHeight int) string {
 	width := smallDialogWidth(dialogs, appWidth)
 	bodyWidth := width - 8
 	if bodyWidth < 20 {
@@ -3510,7 +3607,7 @@ func renderConfirmCreatePath(s styles, dialogs config.Dialogs, pathInput string,
 	message := "Create directory " + strconv.Quote(pathInput) + "?"
 	lines := wrapHelpDescription(message, bodyWidth)
 	lines = append(lines, "")
-	lines = append(lines, renderConfirmAction("Cancel", "n/<esc>", choice == confirmCancel, s)+s.popupBody.Render("   ")+renderConfirmAction("Create", "y", choice == confirmYes, s))
+	lines = append(lines, renderConfirmAction("Cancel", keyListLabel(keys.Confirm.No), choice == confirmCancel, s)+s.popupBody.Render("   ")+renderConfirmAction("Create", keyListLabel(keys.Confirm.Yes), choice == confirmYes, s))
 	return renderCenteredTitledBox("Confirm", "", strings.Join(lines, "\n"), width, smallDialogHeight(dialogs, appHeight, len(lines)+4), 3, s)
 }
 
@@ -3527,14 +3624,22 @@ func renderConfirmAction(label string, key string, selected bool, s styles) stri
 }
 
 func renderCreateSession(s styles, dialogs config.Dialogs, value string, appWidth int, appHeight int) string {
-	return renderNamePrompt(s, dialogs, "Create Named Session", "Create a tmux session from the selected row.", "create", value, appWidth, appHeight)
+	return renderCreateSessionWithKeys(s, dialogs, config.Default().UI.Keys, value, appWidth, appHeight)
+}
+
+func renderCreateSessionWithKeys(s styles, dialogs config.Dialogs, keys config.KeyBindings, value string, appWidth int, appHeight int) string {
+	return renderNamePrompt(s, dialogs, keys, "Create Named Session", "Create a tmux session from the selected row.", "create", value, appWidth, appHeight)
 }
 
 func renderRenameSession(s styles, dialogs config.Dialogs, value string, appWidth int, appHeight int) string {
-	return renderNamePrompt(s, dialogs, "Rename Session", "Rename the selected tmux session.", "rename", value, appWidth, appHeight)
+	return renderRenameSessionWithKeys(s, dialogs, config.Default().UI.Keys, value, appWidth, appHeight)
 }
 
-func renderNamePrompt(s styles, dialogs config.Dialogs, title string, message string, action string, value string, appWidth int, appHeight int) string {
+func renderRenameSessionWithKeys(s styles, dialogs config.Dialogs, keys config.KeyBindings, value string, appWidth int, appHeight int) string {
+	return renderNamePrompt(s, dialogs, keys, "Rename Session", "Rename the selected tmux session.", "rename", value, appWidth, appHeight)
+}
+
+func renderNamePrompt(s styles, dialogs config.Dialogs, keys config.KeyBindings, title string, message string, action string, value string, appWidth int, appHeight int) string {
 	width := smallDialogWidth(dialogs, appWidth)
 	bodyWidth := width - 8
 	if bodyWidth < 20 {
@@ -3545,12 +3650,17 @@ func renderNamePrompt(s styles, dialogs config.Dialogs, title string, message st
 		"",
 		renderSearchBox("name ❯ ", value, bodyWidth, s),
 		"",
-		s.popupAccent.Render("<enter>") + s.popupMuted.Render(" "+action) + s.popupBody.Render("   ") + s.popupAccent.Render("<esc>") + s.popupMuted.Render(" cancel"),
+		s.popupAccent.Render(keyListLabel(keys.Browse.OpenSelected)) + s.popupMuted.Render(" "+action) + s.popupBody.Render("   ") + s.popupAccent.Render(keyListLabel(keys.Browse.Quit)) + s.popupMuted.Render(" cancel"),
 	}
 	return renderCenteredTitledBox(title, "", strings.Join(lines, "\n"), width, smallDialogHeight(dialogs, appHeight, len(lines)+4), 3, s)
 }
 
 func renderErrorPopup(s styles, dialogs config.Dialogs, message string, appWidth int, appHeight int) string {
+	defaults := config.Default().UI.Keys
+	return renderErrorPopupWithKeys(s, dialogs, dismissKeys(defaults.Browse.Quit), defaults.Browse.Reload, message, appWidth, appHeight)
+}
+
+func renderErrorPopupWithKeys(s styles, dialogs config.Dialogs, dismissKeys []string, retryKeys []string, message string, appWidth int, appHeight int) string {
 	width := smallDialogWidth(dialogs, appWidth)
 	bodyWidth := width - 8
 	if bodyWidth < 20 {
@@ -3558,11 +3668,16 @@ func renderErrorPopup(s styles, dialogs config.Dialogs, message string, appWidth
 	}
 	lines := wrapHelpDescription(message, bodyWidth)
 	lines = append(lines, "")
-	lines = append(lines, s.popupAccent.Render("<esc>")+s.popupMuted.Render(" dismiss")+s.popupBody.Render("   ")+s.popupAccent.Render("<c-r>")+s.popupMuted.Render(" retry/reload"))
+	lines = append(lines, s.popupAccent.Render(keyListLabel(dismissKeys))+s.popupMuted.Render(" dismiss")+s.popupBody.Render("   ")+s.popupAccent.Render(keyListLabel(retryKeys))+s.popupMuted.Render(" retry/reload"))
 	return renderCenteredTitledBox("Error", "", strings.Join(lines, "\n"), width, smallDialogHeight(dialogs, appHeight, len(lines)+4), 3, s)
 }
 
 func renderPathNoticePopup(s styles, dialogs config.Dialogs, message string, appWidth int, appHeight int) string {
+	defaults := config.Default().UI.Keys
+	return renderPathNoticePopupWithKeys(s, dialogs, defaults.Browse.OpenSelected, dismissKeys(defaults.Browse.Quit), message, appWidth, appHeight)
+}
+
+func renderPathNoticePopupWithKeys(s styles, dialogs config.Dialogs, acceptKeys []string, dismissKeys []string, message string, appWidth int, appHeight int) string {
 	width := smallDialogWidth(dialogs, appWidth)
 	bodyWidth := width - 8
 	if bodyWidth < 20 {
@@ -3570,14 +3685,18 @@ func renderPathNoticePopup(s styles, dialogs config.Dialogs, message string, app
 	}
 	lines := wrapHelpDescription(message, bodyWidth)
 	lines = append(lines, "")
-	lines = append(lines, s.popupAccent.Render("<enter>/<esc>")+s.popupMuted.Render(" dismiss"))
+	lines = append(lines, s.popupAccent.Render(keyListLabel(append(append([]string(nil), acceptKeys...), dismissKeys...)))+s.popupMuted.Render(" dismiss"))
 	return renderCenteredTitledBox("Notice", "", strings.Join(lines, "\n"), width, smallDialogHeight(dialogs, appHeight, len(lines)+4), 3, s)
 }
 
 func renderHelpPanel(s styles, dialogs config.Dialogs, previous mode, cursor int, scroll int, appWidth int, appHeight int) string {
-	items := helpItemsForMode(previous)
+	return renderHelpPanelWithKeys(s, dialogs, config.Default().UI.Keys, previous, cursor, scroll, appWidth, appHeight)
+}
+
+func renderHelpPanelWithKeys(s styles, dialogs config.Dialogs, keys config.KeyBindings, previous mode, cursor int, scroll int, appWidth int, appHeight int) string {
+	items := helpItemsForModeWithKeys(previous, keys)
 	if len(items) == 0 {
-		items = helpItemsForMode(modeBrowse)
+		items = helpItemsForModeWithKeys(modeBrowse, keys)
 	}
 	if cursor < 0 {
 		cursor = 0
@@ -4058,55 +4177,63 @@ func commandListHeightForFrame(frame dialogFrame) int {
 }
 
 func helpItemsForMode(previous mode) []helpItem {
+	return helpItemsForModeWithKeys(previous, config.Default().UI.Keys)
+}
+
+func (m Model) helpItemsForMode(previous mode) []helpItem {
+	return helpItemsForModeWithKeys(previous, m.keys)
+}
+
+func helpItemsForModeWithKeys(previous mode, keys config.KeyBindings) []helpItem {
 	if previous == modePathSearch {
-		specs := pathSearchCommandSpecs()
+		specs := pathSearchCommandSpecsFor(keys)
 		return []helpItem{
 			{Key: "type", Action: "edit path prompt", Description: "Type a path-like prompt; the text after the last slash is used as the fuzzy query."},
-			{Key: "backspace", Action: "remove character", Description: "Remove one character from the path prompt and reparse the root/query."},
-			{Key: "<alt-backspace>", Action: "remove word", Description: "Remove one path or word segment from the prompt and reparse the root/query."},
-			{Key: "<c-u>", Action: "clear prompt", Description: "Clear the path prompt and reparse the root/query."},
-			{Key: "<up>/<down>", Action: "move selection", Description: "Move through fuzzy results without changing the typed path."},
-			{Key: "<tab>", Action: "complete/narrow", Description: "Complete the current path segment, or narrow into the selected fuzzy result."},
-			{Key: "<s-tab>", Action: "previous completion", Description: "Cycle backward through the current completion candidates."},
-			{Key: "<left>/<right>", Action: "accept completion cycle", Description: "Clear the current completion cycle so the next Tab completes the next path level."},
+			{Key: keyListLabel(keys.PathSearch.DeleteChar), Action: "remove character", Description: "Remove one character from the path prompt and reparse the root/query."},
+			{Key: keyListLabel(keys.PathSearch.DeleteWord), Action: "remove word", Description: "Remove one path or word segment from the prompt and reparse the root/query."},
+			{Key: keyListLabel(keys.PathSearch.ClearInput), Action: "clear prompt", Description: "Clear the path prompt and reparse the root/query."},
+			{Key: combinedKeyLabel(keys.PathSearch.Up, keys.PathSearch.Down), Action: "move selection", Description: "Move through fuzzy results without changing the typed path."},
+			{Key: keyListLabel(keys.PathSearch.CompleteNext), Action: "complete/narrow", Description: "Complete the current path segment, or narrow into the selected fuzzy result."},
+			{Key: keyListLabel(keys.PathSearch.CompletePrevious), Action: "previous completion", Description: "Cycle backward through the current completion candidates."},
+			{Key: keyListLabel(keys.PathSearch.AcceptCompletion), Action: "accept completion cycle", Description: "Clear the current completion cycle so the next Tab completes the next path level."},
 			helpItemFromSpec(specs[0]),
 			helpItemFromSpec(specs[1]),
 			helpItemFromSpec(specs[2]),
 			helpItemFromSpec(specs[3]),
-			{Key: "<c-`>", Action: "open last session", Description: "Switch to tmux's last active session."},
+			{Key: keyListLabel(keys.PathSearch.OpenLastSession), Action: "open last session", Description: "Switch to tmux's last active session."},
 			helpItemFromSpec(specs[4]),
 			helpItemFromSpec(specs[5]),
 			helpItemFromSpec(specs[6]),
-			{Key: "<c-g>", Action: "command palette", Description: "Open the command palette for path-search actions."},
+			{Key: keyListLabel(keys.PathSearch.CommandPalette), Action: "command palette", Description: "Open the command palette for path-search actions."},
 			helpItemFromSpec(specs[7]),
 			helpItemFromSpec(specs[8]),
 		}
 	}
 	if previous == modeCommands {
-		specs := browseCommandSpecs()
+		specs := browseCommandSpecsFor(keys)
 		return []helpItem{
 			{Key: "type", Action: "filter commands", Description: "Fuzzy-search commands by title, key, and description."},
-			{Key: "backspace", Action: "remove character", Description: "Remove one character from the command search prompt."},
-			{Key: "<alt-backspace>", Action: "remove word", Description: "Remove one word from the command search prompt."},
-			{Key: "<c-u>", Action: "clear prompt", Description: "Clear the command search prompt."},
-			{Key: "<up>/<down>", Action: "move selection", Description: "Move through available commands."},
-			{Key: "<enter>", Action: "run selected command", Description: "Run the selected command when it is available in the current context."},
-			{Key: "<c-g>", Action: "close palette", Description: "Close the command palette and return to the previous mode."},
-			{Key: "<esc>", Action: "close palette/help", Description: "Close help, then close the command palette when pressed again."},
-			{Key: "<c-?>", Action: "toggle help", Description: "Show or close this help popup."},
+			{Key: keyListLabel(keys.Commands.DeleteChar), Action: "remove character", Description: "Remove one character from the command search prompt."},
+			{Key: keyListLabel(keys.Commands.DeleteWord), Action: "remove word", Description: "Remove one word from the command search prompt."},
+			{Key: keyListLabel(keys.Commands.ClearInput), Action: "clear prompt", Description: "Clear the command search prompt."},
+			{Key: combinedKeyLabel(keys.Commands.Up, keys.Commands.Down), Action: "move selection", Description: "Move through available commands."},
+			{Key: keyListLabel(keys.Commands.RunSelected), Action: "run selected command", Description: "Run the selected command when it is available in the current context."},
+			{Key: keyListLabel(keys.Commands.Close), Action: "close palette", Description: "Close the command palette and return to the previous mode."},
+			{Key: keyListLabel(keys.Help.Close), Action: "close help", Description: "Close help and return to the command palette."},
+			{Key: keyListLabel(keys.Commands.Help), Action: "toggle help", Description: "Show or close this help popup."},
 			{Key: "Quit command", Action: specs[10].Title, Description: specs[10].Description},
 		}
 	}
-	specs := browseCommandSpecs()
+	specs := browseCommandSpecsFor(keys)
 	return []helpItem{
 		{Key: "type", Action: "filter sessions and roots", Description: "Filter open tmux sessions and configured root candidates."},
-		{Key: "backspace", Action: "remove character", Description: "Remove one character from the filter prompt."},
-		{Key: "<alt-backspace>", Action: "remove word", Description: "Remove one word from the filter prompt."},
-		{Key: "<c-u>", Action: "clear prompt", Description: "Clear the filter prompt."},
+		{Key: keyListLabel(keys.Browse.DeleteChar), Action: "remove character", Description: "Remove one character from the filter prompt."},
+		{Key: keyListLabel(keys.Browse.DeleteWord), Action: "remove word", Description: "Remove one word from the filter prompt."},
+		{Key: keyListLabel(keys.Browse.ClearInput), Action: "clear prompt", Description: "Clear the filter prompt."},
 		helpItemFromSpec(specs[0]),
-		{Key: "<up>/<down>", Action: "move selection", Description: "Move through matching sessions and root candidates."},
-		{Key: "<tab>/<s-tab>", Action: "jump sections", Description: "Jump between open sessions and available workspaces."},
-		{Key: "<c-g>", Action: "command overlay", Description: "Open the command overlay for less frequent actions."},
+		{Key: combinedKeyLabel(keys.Browse.Up, keys.Browse.Down), Action: "move selection", Description: "Move through matching sessions and root candidates."},
+		{Key: combinedKeyLabel(keys.Browse.JumpNextSection, keys.Browse.JumpPreviousSection), Action: "jump sections", Description: "Jump between open sessions and available workspaces."},
+		{Key: keyListLabel(keys.Browse.CommandPalette), Action: "command overlay", Description: "Open the command overlay for less frequent actions."},
 		helpItemFromSpec(specs[1]),
 		helpItemFromSpec(specs[3]),
 		helpItemFromSpec(specs[4]),

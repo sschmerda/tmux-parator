@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -139,6 +140,102 @@ height = 12
 	}
 	if cfg.UI.Dialogs.Panel.Width != 88 || cfg.UI.Dialogs.Panel.Height != 12 {
 		t.Fatalf("panel dialog = %#v, want default width and overridden height", cfg.UI.Dialogs.Panel)
+	}
+}
+
+func TestLoadFileReadsPartialUIKeyBindings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeFile(t, path, `
+[ui.keys.browse]
+open_selected = ["ctrl+o"]
+`)
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile() error = %v", err)
+	}
+	if got := strings.Join(cfg.UI.Keys.Browse.OpenSelected, ","); got != "ctrl+o" {
+		t.Fatalf("browse open_selected = %q, want ctrl+o", got)
+	}
+	if got := strings.Join(cfg.UI.Keys.Browse.Quit, ","); got != "ctrl+c,esc" {
+		t.Fatalf("browse quit = %q, want defaults preserved", got)
+	}
+	if got := strings.Join(cfg.UI.Keys.PathSearch.OpenSelected, ","); got != "enter" {
+		t.Fatalf("path search open_selected = %q, want default preserved", got)
+	}
+}
+
+func TestLoadFileRejectsDuplicateUIKeyBindingsInSameContext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeFile(t, path, `
+[ui.keys.browse]
+open_selected = ["ctrl+o"]
+reload = ["ctrl+o"]
+`)
+	_, err := LoadFile(path)
+	if err == nil {
+		t.Fatal("LoadFile() error = nil, want duplicate key error")
+	}
+	if !strings.Contains(err.Error(), `ui.keys.browse maps key "ctrl+o"`) {
+		t.Fatalf("LoadFile() error = %v, want duplicate key error", err)
+	}
+}
+
+func TestLoadFileAllowsDuplicateUIKeyBindingsAcrossContexts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeFile(t, path, `
+[ui.keys.browse]
+open_selected = ["ctrl+x"]
+
+[ui.keys.path_search]
+open_selected = ["ctrl+x"]
+`)
+	if _, err := LoadFile(path); err != nil {
+		t.Fatalf("LoadFile() error = %v, want duplicate key across contexts allowed", err)
+	}
+}
+
+func TestLoadFileRejectsInvalidUIKeyBinding(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeFile(t, path, `
+[ui.keys.browse]
+open_selected = ["control-o"]
+`)
+	_, err := LoadFile(path)
+	if err == nil {
+		t.Fatal("LoadFile() error = nil, want invalid key error")
+	}
+	if !strings.Contains(err.Error(), `invalid key "control-o"`) {
+		t.Fatalf("LoadFile() error = %v, want invalid key error", err)
+	}
+}
+
+func TestLoadFileRejectsEmptyUIKeyBinding(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeFile(t, path, `
+[ui.keys.browse]
+open_selected = []
+`)
+	_, err := LoadFile(path)
+	if err == nil {
+		t.Fatal("LoadFile() error = nil, want empty key list error")
+	}
+	if !strings.Contains(err.Error(), "ui.keys.browse.open_selected must include at least one key") {
+		t.Fatalf("LoadFile() error = %v, want empty key list error", err)
+	}
+}
+
+func TestLoadFileRejectsUnknownUIKeyBindingAction(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeFile(t, path, `
+[ui.keys.browse]
+launch = ["ctrl+l"]
+`)
+	_, err := LoadFile(path)
+	if err == nil {
+		t.Fatal("LoadFile() error = nil, want unknown action error")
+	}
+	if !strings.Contains(err.Error(), "unknown key ui.keys.browse.launch") {
+		t.Fatalf("LoadFile() error = %v, want unknown action error", err)
 	}
 }
 

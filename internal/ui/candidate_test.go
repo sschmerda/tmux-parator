@@ -941,6 +941,41 @@ func TestCommandPaletteIncludesOpenLastOnlyInBrowse(t *testing.T) {
 	}
 }
 
+func TestConfiguredBrowseOpenSelectedKeyReplacesDefault(t *testing.T) {
+	client := &fakeSessionClient{}
+	keys := config.Default().UI.Keys
+	keys.Browse.OpenSelected = []string{"x"}
+	model := NewModelWithKeys(client, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{}, keys)
+	model.sessions = []tmux.Session{{Name: "main"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("default enter binding returned command after remap")
+	}
+	if client.switchedSession != "" {
+		t.Fatalf("default enter switched session %q after remap", client.switchedSession)
+	}
+
+	updated, cmd = model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("configured x binding returned nil command")
+	}
+	msg := cmd()
+	if switched, ok := msg.(switchedMsg); !ok || switched.err != nil {
+		t.Fatalf("configured x binding command returned %#v", msg)
+	}
+	if client.switchedSession != "main" {
+		t.Fatalf("configured x binding switched session %q, want main", client.switchedSession)
+	}
+	if model.filter != "" {
+		t.Fatalf("configured x binding updated filter to %q", model.filter)
+	}
+}
+
 func TestRunOpenLastSessionCommandCallsClient(t *testing.T) {
 	client := &fakeSessionClient{}
 	model := NewModel(client, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})

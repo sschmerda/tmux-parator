@@ -54,19 +54,22 @@ Controls:
   type      filter sessions and roots
   enter     open selected item
   ctrl-g    command overlay
-  ctrl-n    new session
+  ctrl-n    rename selected session
+  ctrl-s    create named session
   ctrl-t    path search
   ctrl-r    reload
   ctrl-k    kill selected session
-  ?         help
-  esc       quit or cancel`)
+  ctrl-_    help
+  esc       quit or cancel
+
+Bindings can be changed under [ui.keys] in config.toml.`)
 			return nil
 		default:
 			return fmt.Errorf("unknown command %q", args[0])
 		}
 	}
 
-	model := ui.NewModel(tmux.NewClient(runner), activeTheme, cfg.Roots, discovery.OptionsFromConfig(cfg.Discovery), cfg.PathSearch, cfg.UI.Glyphs, cfg.UI.GlyphColors, cfg.UI.Columns, cfg.UI.Dialogs)
+	model := ui.NewModelWithKeys(tmux.NewClient(runner), activeTheme, cfg.Roots, discovery.OptionsFromConfig(cfg.Discovery), cfg.PathSearch, cfg.UI.Glyphs, cfg.UI.GlyphColors, cfg.UI.Columns, cfg.UI.Keys, cfg.UI.Dialogs)
 	_, err = tea.NewProgram(model, tea.WithAltScreen()).Run()
 	return err
 }
