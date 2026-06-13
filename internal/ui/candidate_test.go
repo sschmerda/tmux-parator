@@ -528,6 +528,207 @@ func TestTypingFilterSelectsFirstMatchAndClearingRestoresPreviousCursor(t *testi
 	}
 }
 
+func TestAltBackspaceDeletesShellWordFromBrowseFilter(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.height = 10
+	model.sessions = []tmux.Session{{Name: "alpha"}, {Name: "beta"}, {Name: "gamma"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+	model.cursor = 2
+
+	for _, value := range "alpha beta" {
+		updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{value}})
+		model = updated.(Model)
+	}
+	var updated tea.Model
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyBackspace, Alt: true})
+	model = updated.(Model)
+
+	if model.filter != "alpha " {
+		t.Fatalf("filter = %q, want alpha space", model.filter)
+	}
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyBackspace, Alt: true})
+	model = updated.(Model)
+
+	if model.filter != "" {
+		t.Fatalf("filter after second alt-backspace = %q, want empty", model.filter)
+	}
+	if model.cursor != 2 {
+		t.Fatalf("cursor after clearing filter = %d, want 2", model.cursor)
+	}
+}
+
+func TestAltBackspaceDeletesShellWordFromPromptModes(t *testing.T) {
+	t.Run("commands", func(t *testing.T) {
+		model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+		model.openCommands(modeBrowse)
+		model.commandInput = "open selected"
+
+		updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyBackspace, Alt: true})
+		model = updated.(Model)
+
+		if model.commandInput != "open " {
+			t.Fatalf("commandInput = %q, want open space", model.commandInput)
+		}
+	})
+
+	t.Run("create", func(t *testing.T) {
+		model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+		model.mode = modeCreateSession
+		model.createText = "api-server"
+
+		updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyBackspace, Alt: true})
+		model = updated.(Model)
+
+		if model.createText != "api-" {
+			t.Fatalf("createText = %q, want api-", model.createText)
+		}
+	})
+
+	t.Run("rename", func(t *testing.T) {
+		model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+		model.mode = modeRenameSession
+		model.renameText = "docs_v2"
+
+		updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyBackspace, Alt: true})
+		model = updated.(Model)
+
+		if model.renameText != "docs_" {
+			t.Fatalf("renameText = %q, want docs_", model.renameText)
+		}
+	})
+}
+
+func TestCtrlUClearsPromptModes(t *testing.T) {
+	t.Run("browse", func(t *testing.T) {
+		model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+		model.height = 10
+		model.sessions = []tmux.Session{{Name: "alpha"}, {Name: "beta"}, {Name: "gamma"}}
+		model.rebuildCandidates()
+		model.applyFilter()
+		model.cursor = 2
+		model.addBrowseFilterText("alpha")
+
+		updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlU})
+		model = updated.(Model)
+
+		if model.filter != "" {
+			t.Fatalf("filter = %q, want empty", model.filter)
+		}
+		if model.cursor != 2 {
+			t.Fatalf("cursor after clearing filter = %d, want 2", model.cursor)
+		}
+	})
+
+	t.Run("commands", func(t *testing.T) {
+		model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+		model.openCommands(modeBrowse)
+		model.commandInput = "open selected"
+
+		updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlU})
+		model = updated.(Model)
+
+		if model.commandInput != "" {
+			t.Fatalf("commandInput = %q, want empty", model.commandInput)
+		}
+	})
+
+	t.Run("create", func(t *testing.T) {
+		model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+		model.mode = modeCreateSession
+		model.createText = "api-server"
+
+		updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlU})
+		model = updated.(Model)
+
+		if model.createText != "" {
+			t.Fatalf("createText = %q, want empty", model.createText)
+		}
+	})
+
+	t.Run("rename", func(t *testing.T) {
+		model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+		model.mode = modeRenameSession
+		model.renameText = "docs_v2"
+
+		updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlU})
+		model = updated.(Model)
+
+		if model.renameText != "" {
+			t.Fatalf("renameText = %q, want empty", model.renameText)
+		}
+	})
+
+	t.Run("path", func(t *testing.T) {
+		model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+		model.mode = modePathSearch
+		model.pathInput = "/tmp/my-project"
+		model.pathRoot = "/tmp"
+		model.pathCompletions = []candidate{{kind: candidatePath}}
+		model.pathCompletionCursor = 0
+		model.pathCompletionInput = model.pathInput
+		model.pathCompletionRoot = model.pathRoot
+		model.pathCompletionQuery = "my-project"
+
+		updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlU})
+		model = updated.(Model)
+
+		if model.pathInput != "" {
+			t.Fatalf("pathInput = %q, want empty", model.pathInput)
+		}
+		if model.hasPathCompletionCycle() {
+			t.Fatalf("path completion cycle still active: %#v", model.pathCompletions)
+		}
+	})
+}
+
+func TestPathSearchAltBackspaceReparsesInputAndClearsCompletion(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.mode = modePathSearch
+	model.pathInput = "/tmp/my-project"
+	model.pathRoot = "/tmp"
+	model.pathCompletions = []candidate{{kind: candidatePath}}
+	model.pathCompletionCursor = 0
+	model.pathCompletionInput = model.pathInput
+	model.pathCompletionRoot = model.pathRoot
+	model.pathCompletionQuery = "my-project"
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyBackspace, Alt: true})
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("alt-backspace with unchanged root returned command")
+	}
+	if model.pathInput != "/tmp/my-" {
+		t.Fatalf("pathInput = %q, want /tmp/my-", model.pathInput)
+	}
+	if model.pathRoot != "/tmp" {
+		t.Fatalf("pathRoot = %q, want /tmp", model.pathRoot)
+	}
+	if model.hasPathCompletionCycle() {
+		t.Fatalf("path completion cycle still active: %#v", model.pathCompletions)
+	}
+}
+
+func TestTextDeletionHelpersAreRuneSafe(t *testing.T) {
+	if got := deleteLastRune("aé"); got != "a" {
+		t.Fatalf("deleteLastRune() = %q, want a", got)
+	}
+	tests := map[string]string{
+		"hello world":     "hello ",
+		"/tmp/my-project": "/tmp/my-",
+		"/tmp/repo/":      "/tmp/repo",
+		"docs_v2":         "docs_",
+		"alpha  ":         "",
+	}
+	for input, want := range tests {
+		if got := deleteLastShellWord(input); got != want {
+			t.Fatalf("deleteLastShellWord(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestPathCompletionsKeepAlphabeticalOrderWithoutQuery(t *testing.T) {
 	children := []pathsearch.Candidate{
 		{Name: "alpha", Path: "/tmp/alpha"},

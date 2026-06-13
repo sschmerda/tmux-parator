@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -536,9 +537,11 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.confirmChoice = confirmCancel
 		}
 	case "backspace", "ctrl+h":
-		if m.filter != "" {
-			m.removeBrowseFilterRune()
-		}
+		m.removeBrowseFilterRune()
+	case "alt+backspace":
+		m.removeBrowseFilterWord()
+	case "ctrl+u", "meta+backspace":
+		m.clearBrowseFilter()
 	default:
 		if len(msg.String()) == 1 && !msg.Alt {
 			m.addBrowseFilterText(msg.String())
@@ -571,11 +574,14 @@ func (m Model) updateCommandKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.runCommand(items[m.commandCursor].item)
 	case "backspace", "ctrl+h":
-		if m.commandInput != "" {
-			runes := []rune(m.commandInput)
-			m.commandInput = string(runes[:len(runes)-1])
-			m.clampCommandCursor()
-		}
+		m.commandInput = deleteLastRune(m.commandInput)
+		m.clampCommandCursor()
+	case "alt+backspace":
+		m.commandInput = deleteLastShellWord(m.commandInput)
+		m.clampCommandCursor()
+	case "ctrl+u", "meta+backspace":
+		m.commandInput = ""
+		m.clampCommandCursor()
 	default:
 		if len(msg.Runes) > 0 && !msg.Alt {
 			m.commandInput += string(msg.Runes)
@@ -616,10 +622,11 @@ func (m Model) updateCreateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.createMetadata = tmux.SessionMetadata{}
 		return m, m.createSessionWithMetadata(name, path, metadata)
 	case "backspace", "ctrl+h":
-		if m.createText != "" {
-			runes := []rune(m.createText)
-			m.createText = string(runes[:len(runes)-1])
-		}
+		m.createText = deleteLastRune(m.createText)
+	case "alt+backspace":
+		m.createText = deleteLastShellWord(m.createText)
+	case "ctrl+u", "meta+backspace":
+		m.createText = ""
 	default:
 		if len(msg.Runes) > 0 {
 			m.createText += string(msg.Runes)
@@ -657,10 +664,11 @@ func (m Model) updateRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.renameOriginal = ""
 		return m, m.renameSession(original, name)
 	case "backspace", "ctrl+h":
-		if m.renameText != "" {
-			runes := []rune(m.renameText)
-			m.renameText = string(runes[:len(runes)-1])
-		}
+		m.renameText = deleteLastRune(m.renameText)
+	case "alt+backspace":
+		m.renameText = deleteLastShellWord(m.renameText)
+	case "ctrl+u", "meta+backspace":
+		m.renameText = ""
 	default:
 		if len(msg.Runes) > 0 {
 			m.renameText += string(msg.Runes)
@@ -759,11 +767,11 @@ func (m Model) updatePathSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeBrowse
 		return m, m.openCandidate(selected)
 	case "backspace", "ctrl+h":
-		if m.pathInput != "" {
-			m.pathInput = m.pathInput[:len(m.pathInput)-1]
-			m.clearPathCompletion()
-			return m, m.applyPathInputChange()
-		}
+		return m.updatePathInput(deleteLastRune(m.pathInput))
+	case "alt+backspace":
+		return m.updatePathInput(deleteLastShellWord(m.pathInput))
+	case "ctrl+u", "meta+backspace":
+		return m.updatePathInput("")
 	default:
 		if len(msg.String()) == 1 && !msg.Alt {
 			m.pathInput += msg.String()
@@ -1100,11 +1108,22 @@ func (m *Model) addBrowseFilterText(value string) {
 }
 
 func (m *Model) removeBrowseFilterRune() {
-	if m.filter == "" {
+	m.updateBrowseFilter(deleteLastRune(m.filter))
+}
+
+func (m *Model) removeBrowseFilterWord() {
+	m.updateBrowseFilter(deleteLastShellWord(m.filter))
+}
+
+func (m *Model) clearBrowseFilter() {
+	m.updateBrowseFilter("")
+}
+
+func (m *Model) updateBrowseFilter(value string) {
+	if value == m.filter {
 		return
 	}
-	runes := []rune(m.filter)
-	m.filter = string(runes[:len(runes)-1])
+	m.filter = value
 	m.applyFilter()
 	if m.filter == "" {
 		if m.filterRestoreActive {
@@ -1119,6 +1138,53 @@ func (m *Model) removeBrowseFilterRune() {
 	m.cursor = 0
 	m.scroll = 0
 	m.clampCursor()
+}
+
+func (m Model) updatePathInput(value string) (tea.Model, tea.Cmd) {
+	if value == m.pathInput {
+		return m, nil
+	}
+	m.pathInput = value
+	m.clearPathCompletion()
+	return m, m.applyPathInputChange()
+}
+
+func deleteLastRune(value string) string {
+	if value == "" {
+		return ""
+	}
+	runes := []rune(value)
+	return string(runes[:len(runes)-1])
+}
+
+func deleteLastShellWord(value string) string {
+	runes := []rune(value)
+	end := len(runes)
+	if end == 0 {
+		return ""
+	}
+	for end > 0 && unicode.IsSpace(runes[end-1]) {
+		end--
+	}
+	if end == 0 {
+		return ""
+	}
+	if isShellWordSeparator(runes[end-1]) {
+		return string(runes[:end-1])
+	}
+	for end > 0 && !isShellWordSeparator(runes[end-1]) {
+		end--
+	}
+	return string(runes[:end])
+}
+
+func isShellWordSeparator(value rune) bool {
+	switch value {
+	case '/', '\\', '.', '-', '_', ':':
+		return true
+	default:
+		return unicode.IsSpace(value)
+	}
 }
 
 func sortMainMatches(matches []fuzzy.Match) {
@@ -3974,6 +4040,8 @@ func helpItemsForMode(previous mode) []helpItem {
 		return []helpItem{
 			{Key: "type", Action: "edit path prompt", Description: "Type a path-like prompt; the text after the last slash is used as the fuzzy query."},
 			{Key: "backspace", Action: "remove character", Description: "Remove one character from the path prompt and reparse the root/query."},
+			{Key: "<alt-backspace>", Action: "remove word", Description: "Remove one path or word segment from the prompt and reparse the root/query."},
+			{Key: "<c-u>", Action: "clear prompt", Description: "Clear the path prompt and reparse the root/query."},
 			{Key: "<up>/<down>", Action: "move selection", Description: "Move through fuzzy results without changing the typed path."},
 			{Key: "<tab>", Action: "complete/narrow", Description: "Complete the current path segment, or narrow into the selected fuzzy result."},
 			{Key: "<s-tab>", Action: "previous completion", Description: "Cycle backward through the current completion candidates."},
@@ -3996,6 +4064,8 @@ func helpItemsForMode(previous mode) []helpItem {
 		return []helpItem{
 			{Key: "type", Action: "filter commands", Description: "Fuzzy-search commands by title, key, and description."},
 			{Key: "backspace", Action: "remove character", Description: "Remove one character from the command search prompt."},
+			{Key: "<alt-backspace>", Action: "remove word", Description: "Remove one word from the command search prompt."},
+			{Key: "<c-u>", Action: "clear prompt", Description: "Clear the command search prompt."},
 			{Key: "<up>/<down>", Action: "move selection", Description: "Move through available commands."},
 			{Key: "<enter>", Action: "run selected command", Description: "Run the selected command when it is available in the current context."},
 			{Key: "<c-g>", Action: "close palette", Description: "Close the command palette and return to the previous mode."},
@@ -4007,6 +4077,9 @@ func helpItemsForMode(previous mode) []helpItem {
 	specs := browseCommandSpecs()
 	return []helpItem{
 		{Key: "type", Action: "filter sessions and roots", Description: "Filter open tmux sessions and configured root candidates."},
+		{Key: "backspace", Action: "remove character", Description: "Remove one character from the filter prompt."},
+		{Key: "<alt-backspace>", Action: "remove word", Description: "Remove one word from the filter prompt."},
+		{Key: "<c-u>", Action: "clear prompt", Description: "Clear the filter prompt."},
 		helpItemFromSpec(specs[0]),
 		{Key: "<up>/<down>", Action: "move selection", Description: "Move through matching sessions and root candidates."},
 		{Key: "<tab>/<s-tab>", Action: "jump sections", Description: "Jump between open sessions and available workspaces."},
