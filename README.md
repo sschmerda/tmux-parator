@@ -59,6 +59,66 @@ Confirmation popups:
 - `Enter` chooses the selected action.
 - `y` confirms immediately; `n` or `Esc` cancels immediately.
 
+## Hotkeys
+
+Default bindings can be changed under `[ui.keys]` in `config.toml`.
+
+Main list:
+
+| Key | Action |
+| --- | --- |
+| `Up` / `Down` | Move selection one row. |
+| `Ctrl-y` / `Ctrl-e` | Scroll the result viewport up/down one row, keeping the selection visible. |
+| `PgUp` / `Ctrl-b` | Move selection up by half a page. |
+| `PgDown` / `Ctrl-d` | Move selection down by half a page. |
+| `Tab` / `Shift-Tab` | Jump to the next/previous section. |
+| `Enter` | Open selected item. |
+| `Ctrl-g` | Open command palette. |
+| `Ctrl-n` | Rename selected open tmux session. |
+| `Ctrl-s` | Create a named tmux session from the selected row. |
+| `Ctrl-t` | Open path search. |
+| `Ctrl-r` | Reload sessions and configured roots. |
+| `Ctrl-k` | Confirm killing the selected session. |
+| `Meta-h` / `Meta-i` | Toggle hidden/gitignored directory skipping. |
+| `Ctrl-?` | Show help. |
+| `Esc` | Quit or cancel the current overlay. |
+
+Prompt editing:
+
+| Key | Action |
+| --- | --- |
+| `Backspace` / `Ctrl-h` | Delete one character. |
+| `Alt-Backspace` | Delete one word. |
+| `Ctrl-u` / `Meta-Backspace` | Clear the prompt. |
+
+Path search:
+
+| Key | Action |
+| --- | --- |
+| `Up` / `Down` | Move selection one row. |
+| `Ctrl-y` / `Ctrl-e` | Scroll results up/down one row, keeping the selection visible. |
+| `PgUp` / `Ctrl-b` | Move selection up by half a page. |
+| `PgDown` / `Ctrl-d` | Move selection down by half a page. |
+| `Tab` / `Shift-Tab` | Complete or narrow the current path segment forward/backward. |
+| `Left` / `Right` | Accept the current completion cycle. |
+| `Enter` | Open the selected path result. |
+| `Ctrl-p` | Open the exact typed path when it exists. |
+| `Ctrl-a` | Create the exact typed path after confirmation. |
+| `Ctrl-o` | Cycle the prompt root. |
+| `Ctrl-t` / `Esc` | Close path search. |
+
+Command palette and help:
+
+| Key | Action |
+| --- | --- |
+| `Up` / `Down` | Move command selection one row. |
+| `Ctrl-y` / `Ctrl-e` | Scroll the command/help viewport up/down one row. |
+| `PgUp` / `Ctrl-b` | Move selection up by half a page. |
+| `PgDown` / `Ctrl-d` | Move selection down by half a page. |
+| `Enter` | Run the selected command. |
+| `Esc` / `Ctrl-g` | Close the command palette. |
+| `Ctrl-?` | Toggle help. |
+
 Filtering uses the same weighted, multi-token fuzzy matching style as
 `tmux-dux`. Sessions are shown above configured roots, separated by a divider
 in the unfiltered list. Session rows include an origin chip: ` repo`,
