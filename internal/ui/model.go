@@ -457,6 +457,14 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.helpCursor++
 				m.ensureHelpCursorVisible()
 			}
+		case keyMatches(msg, m.keys.Help.PageUp):
+			m.moveHelpCursor(-halfPageStep(helpListHeightForFrame(panelDialogFrame(m.dialogs, m.innerWidth(), m.innerHeight()))))
+		case keyMatches(msg, m.keys.Help.PageDown):
+			m.moveHelpCursor(halfPageStep(helpListHeightForFrame(panelDialogFrame(m.dialogs, m.innerWidth(), m.innerHeight()))))
+		case keyMatches(msg, m.keys.Help.ScrollUp):
+			m.scrollHelpViewport(-1)
+		case keyMatches(msg, m.keys.Help.ScrollDown):
+			m.scrollHelpViewport(1)
 		}
 		return m, nil
 	}
@@ -548,6 +556,14 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursor++
 			m.ensureCursorVisible()
 		}
+	case keyMatches(msg, m.keys.Browse.PageUp):
+		m.moveBrowseCursor(-halfPageStep(m.listLimit()))
+	case keyMatches(msg, m.keys.Browse.PageDown):
+		m.moveBrowseCursor(halfPageStep(m.listLimit()))
+	case keyMatches(msg, m.keys.Browse.ScrollUp):
+		m.scrollBrowseViewport(-1)
+	case keyMatches(msg, m.keys.Browse.ScrollDown):
+		m.scrollBrowseViewport(1)
 	case keyMatches(msg, m.keys.Browse.JumpNextSection):
 		m.jumpBrowseSection(1)
 	case keyMatches(msg, m.keys.Browse.JumpPreviousSection):
@@ -595,6 +611,14 @@ func (m Model) updateCommandKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.commandCursor++
 			m.ensureCommandCursorVisible()
 		}
+	case keyMatches(msg, m.keys.Commands.PageUp):
+		m.moveCommandCursor(-halfPageStep(commandListHeightForFrame(panelDialogFrame(m.dialogs, m.innerWidth(), m.innerHeight()))))
+	case keyMatches(msg, m.keys.Commands.PageDown):
+		m.moveCommandCursor(halfPageStep(commandListHeightForFrame(panelDialogFrame(m.dialogs, m.innerWidth(), m.innerHeight()))))
+	case keyMatches(msg, m.keys.Commands.ScrollUp):
+		m.scrollCommandViewport(-1)
+	case keyMatches(msg, m.keys.Commands.ScrollDown):
+		m.scrollCommandViewport(1)
 	case keyMatches(msg, m.keys.Commands.RunSelected):
 		if len(items) == 0 || m.commandCursor < 0 || m.commandCursor >= len(items) {
 			return m, nil
@@ -776,6 +800,14 @@ func (m Model) updatePathSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.pathCursor++
 			m.ensurePathCursorVisible()
 		}
+	case keyMatches(msg, m.keys.PathSearch.PageUp):
+		m.movePathCursor(-halfPageStep(m.pathListLimit()))
+	case keyMatches(msg, m.keys.PathSearch.PageDown):
+		m.movePathCursor(halfPageStep(m.pathListLimit()))
+	case keyMatches(msg, m.keys.PathSearch.ScrollUp):
+		m.scrollPathViewport(-1)
+	case keyMatches(msg, m.keys.PathSearch.ScrollDown):
+		m.scrollPathViewport(1)
 	case keyMatches(msg, m.keys.PathSearch.OpenSelected):
 		selected, ok := m.selectedPath()
 		if !ok {
@@ -1910,6 +1942,154 @@ func (m *Model) ensureCursorVisible() {
 	for m.cursorRowsFromScroll(limit) > limit && m.scroll < m.cursor {
 		m.scroll++
 	}
+}
+
+func halfPageStep(limit int) int {
+	step := limit / 2
+	if step < 1 {
+		return 1
+	}
+	return step
+}
+
+func clampIndex(value int, total int) int {
+	if total <= 0 {
+		return 0
+	}
+	if value < 0 {
+		return 0
+	}
+	if value >= total {
+		return total - 1
+	}
+	return value
+}
+
+func maxSimpleScroll(total int, visible int) int {
+	if total <= 0 || visible >= total {
+		return 0
+	}
+	return total - visible
+}
+
+func adjustCursorToSimpleViewport(cursor int, scroll int, visible int, total int) int {
+	cursor = clampIndex(cursor, total)
+	if total == 0 {
+		return 0
+	}
+	if visible < 1 {
+		visible = 1
+	}
+	if cursor < scroll {
+		return scroll
+	}
+	lastVisible := scroll + visible - 1
+	if cursor > lastVisible {
+		return clampIndex(lastVisible, total)
+	}
+	return cursor
+}
+
+func (m *Model) moveBrowseCursor(delta int) {
+	if len(m.filtered) == 0 {
+		m.cursor = 0
+		m.scroll = 0
+		return
+	}
+	m.cursor = clampIndex(m.cursor+delta, len(m.filtered))
+	m.ensureCursorVisible()
+}
+
+func (m *Model) movePathCursor(delta int) {
+	if len(m.pathResult) == 0 {
+		m.pathCursor = 0
+		m.pathScroll = 0
+		return
+	}
+	m.pathCursor = clampIndex(m.pathCursor+delta, len(m.pathResult))
+	m.ensurePathCursorVisible()
+}
+
+func (m *Model) moveCommandCursor(delta int) {
+	items := m.commandMatches()
+	if len(items) == 0 {
+		m.commandCursor = 0
+		m.commandScroll = 0
+		return
+	}
+	m.commandCursor = clampIndex(m.commandCursor+delta, len(items))
+	m.ensureCommandCursorVisible()
+}
+
+func (m *Model) moveHelpCursor(delta int) {
+	items := m.helpItemsForMode(m.previousMode)
+	if len(items) == 0 {
+		m.helpCursor = 0
+		m.helpScroll = 0
+		return
+	}
+	m.helpCursor = clampIndex(m.helpCursor+delta, len(items))
+	m.ensureHelpCursorVisible()
+}
+
+func (m *Model) scrollBrowseViewport(direction int) {
+	if len(m.filtered) == 0 {
+		m.cursor = 0
+		m.scroll = 0
+		return
+	}
+	if direction < 0 && m.scroll > 0 {
+		m.scroll--
+	}
+	if direction > 0 && m.scroll < len(m.filtered)-1 {
+		m.scroll++
+	}
+	m.cursor = clampIndex(m.cursor, len(m.filtered))
+	if m.cursor < m.scroll {
+		m.cursor = m.scroll
+	}
+	limit := m.listLimit()
+	for m.cursorRowsFromScroll(limit) > limit && m.cursor > m.scroll {
+		m.cursor--
+	}
+}
+
+func (m *Model) scrollPathViewport(direction int) {
+	visible := m.pathListLimit()
+	total := len(m.pathResult)
+	if total == 0 {
+		m.pathCursor = 0
+		m.pathScroll = 0
+		return
+	}
+	m.pathScroll = clampIndex(m.pathScroll+direction, maxSimpleScroll(total, visible)+1)
+	m.pathCursor = adjustCursorToSimpleViewport(m.pathCursor, m.pathScroll, visible, total)
+}
+
+func (m *Model) scrollCommandViewport(direction int) {
+	items := m.commandMatches()
+	visible := commandListHeightForFrame(panelDialogFrame(m.dialogs, m.innerWidth(), m.innerHeight()))
+	total := len(items)
+	if total == 0 {
+		m.commandCursor = 0
+		m.commandScroll = 0
+		return
+	}
+	m.commandScroll = clampIndex(m.commandScroll+direction, maxSimpleScroll(total, visible)+1)
+	m.commandCursor = adjustCursorToSimpleViewport(m.commandCursor, m.commandScroll, visible, total)
+}
+
+func (m *Model) scrollHelpViewport(direction int) {
+	items := m.helpItemsForMode(m.previousMode)
+	visible := helpListHeightForFrame(panelDialogFrame(m.dialogs, m.innerWidth(), m.innerHeight()))
+	total := len(items)
+	if total == 0 {
+		m.helpCursor = 0
+		m.helpScroll = 0
+		return
+	}
+	m.helpScroll = clampIndex(m.helpScroll+direction, maxSimpleScroll(total, visible)+1)
+	m.helpCursor = adjustCursorToSimpleViewport(m.helpCursor, m.helpScroll, visible, total)
 }
 
 func (m *Model) ensurePathCursorVisible() {
@@ -4193,6 +4373,8 @@ func helpItemsForModeWithKeys(previous mode, keys config.KeyBindings) []helpItem
 			{Key: keyListLabel(keys.PathSearch.DeleteWord), Action: "remove word", Description: "Remove one path or word segment from the prompt and reparse the root/query."},
 			{Key: keyListLabel(keys.PathSearch.ClearInput), Action: "clear prompt", Description: "Clear the path prompt and reparse the root/query."},
 			{Key: combinedKeyLabel(keys.PathSearch.Up, keys.PathSearch.Down), Action: "move selection", Description: "Move through fuzzy results without changing the typed path."},
+			{Key: combinedKeyLabel(keys.PathSearch.ScrollUp, keys.PathSearch.ScrollDown), Action: "scroll results", Description: "Scroll the result viewport one row while keeping the selection visible."},
+			{Key: combinedKeyLabel(keys.PathSearch.PageUp, keys.PathSearch.PageDown), Action: "page results", Description: "Move the selection by half a page through fuzzy results."},
 			{Key: keyListLabel(keys.PathSearch.CompleteNext), Action: "complete/narrow", Description: "Complete the current path segment, or narrow into the selected fuzzy result."},
 			{Key: keyListLabel(keys.PathSearch.CompletePrevious), Action: "previous completion", Description: "Cycle backward through the current completion candidates."},
 			{Key: keyListLabel(keys.PathSearch.AcceptCompletion), Action: "accept completion cycle", Description: "Clear the current completion cycle so the next Tab completes the next path level."},
@@ -4217,6 +4399,8 @@ func helpItemsForModeWithKeys(previous mode, keys config.KeyBindings) []helpItem
 			{Key: keyListLabel(keys.Commands.DeleteWord), Action: "remove word", Description: "Remove one word from the command search prompt."},
 			{Key: keyListLabel(keys.Commands.ClearInput), Action: "clear prompt", Description: "Clear the command search prompt."},
 			{Key: combinedKeyLabel(keys.Commands.Up, keys.Commands.Down), Action: "move selection", Description: "Move through available commands."},
+			{Key: combinedKeyLabel(keys.Commands.ScrollUp, keys.Commands.ScrollDown), Action: "scroll commands", Description: "Scroll the command viewport one row while keeping the selection visible."},
+			{Key: combinedKeyLabel(keys.Commands.PageUp, keys.Commands.PageDown), Action: "page commands", Description: "Move the selection by half a page through available commands."},
 			{Key: keyListLabel(keys.Commands.RunSelected), Action: "run selected command", Description: "Run the selected command when it is available in the current context."},
 			{Key: keyListLabel(keys.Commands.Close), Action: "close palette", Description: "Close the command palette and return to the previous mode."},
 			{Key: keyListLabel(keys.Help.Close), Action: "close help", Description: "Close help and return to the command palette."},
@@ -4232,6 +4416,8 @@ func helpItemsForModeWithKeys(previous mode, keys config.KeyBindings) []helpItem
 		{Key: keyListLabel(keys.Browse.ClearInput), Action: "clear prompt", Description: "Clear the filter prompt."},
 		helpItemFromSpec(specs[0]),
 		{Key: combinedKeyLabel(keys.Browse.Up, keys.Browse.Down), Action: "move selection", Description: "Move through matching sessions and root candidates."},
+		{Key: combinedKeyLabel(keys.Browse.ScrollUp, keys.Browse.ScrollDown), Action: "scroll results", Description: "Scroll the result viewport one row while keeping the selection visible."},
+		{Key: combinedKeyLabel(keys.Browse.PageUp, keys.Browse.PageDown), Action: "page results", Description: "Move the selection by half a page through matching sessions and root candidates."},
 		{Key: combinedKeyLabel(keys.Browse.JumpNextSection, keys.Browse.JumpPreviousSection), Action: "jump sections", Description: "Jump between open sessions and available workspaces."},
 		{Key: keyListLabel(keys.Browse.CommandPalette), Action: "command overlay", Description: "Open the command overlay for less frequent actions."},
 		helpItemFromSpec(specs[1]),

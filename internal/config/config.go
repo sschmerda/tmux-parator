@@ -56,6 +56,10 @@ type BrowseKeys struct {
 	ToggleIgnored       []string `toml:"toggle_ignored"`
 	Up                  []string `toml:"up"`
 	Down                []string `toml:"down"`
+	PageUp              []string `toml:"page_up"`
+	PageDown            []string `toml:"page_down"`
+	ScrollUp            []string `toml:"scroll_up"`
+	ScrollDown          []string `toml:"scroll_down"`
 	JumpNextSection     []string `toml:"jump_next_section"`
 	JumpPreviousSection []string `toml:"jump_previous_section"`
 	DeleteChar          []string `toml:"delete_char"`
@@ -77,6 +81,10 @@ type PathSearchKeys struct {
 	ToggleIgnored    []string `toml:"toggle_ignored"`
 	Up               []string `toml:"up"`
 	Down             []string `toml:"down"`
+	PageUp           []string `toml:"page_up"`
+	PageDown         []string `toml:"page_down"`
+	ScrollUp         []string `toml:"scroll_up"`
+	ScrollDown       []string `toml:"scroll_down"`
 	CompleteNext     []string `toml:"complete_next"`
 	CompletePrevious []string `toml:"complete_previous"`
 	AcceptCompletion []string `toml:"accept_completion"`
@@ -91,15 +99,23 @@ type CommandKeys struct {
 	RunSelected []string `toml:"run_selected"`
 	Up          []string `toml:"up"`
 	Down        []string `toml:"down"`
+	PageUp      []string `toml:"page_up"`
+	PageDown    []string `toml:"page_down"`
+	ScrollUp    []string `toml:"scroll_up"`
+	ScrollDown  []string `toml:"scroll_down"`
 	DeleteChar  []string `toml:"delete_char"`
 	DeleteWord  []string `toml:"delete_word"`
 	ClearInput  []string `toml:"clear_input"`
 }
 
 type HelpKeys struct {
-	Close []string `toml:"close"`
-	Up    []string `toml:"up"`
-	Down  []string `toml:"down"`
+	Close      []string `toml:"close"`
+	Up         []string `toml:"up"`
+	Down       []string `toml:"down"`
+	PageUp     []string `toml:"page_up"`
+	PageDown   []string `toml:"page_down"`
+	ScrollUp   []string `toml:"scroll_up"`
+	ScrollDown []string `toml:"scroll_down"`
 }
 
 type ConfirmKeys struct {
@@ -228,6 +244,10 @@ type rawBrowseKeys struct {
 	ToggleIgnored       []string `toml:"toggle_ignored"`
 	Up                  []string `toml:"up"`
 	Down                []string `toml:"down"`
+	PageUp              []string `toml:"page_up"`
+	PageDown            []string `toml:"page_down"`
+	ScrollUp            []string `toml:"scroll_up"`
+	ScrollDown          []string `toml:"scroll_down"`
 	JumpNextSection     []string `toml:"jump_next_section"`
 	JumpPreviousSection []string `toml:"jump_previous_section"`
 	DeleteChar          []string `toml:"delete_char"`
@@ -249,6 +269,10 @@ type rawPathSearchKeys struct {
 	ToggleIgnored    []string `toml:"toggle_ignored"`
 	Up               []string `toml:"up"`
 	Down             []string `toml:"down"`
+	PageUp           []string `toml:"page_up"`
+	PageDown         []string `toml:"page_down"`
+	ScrollUp         []string `toml:"scroll_up"`
+	ScrollDown       []string `toml:"scroll_down"`
 	CompleteNext     []string `toml:"complete_next"`
 	CompletePrevious []string `toml:"complete_previous"`
 	AcceptCompletion []string `toml:"accept_completion"`
@@ -263,15 +287,23 @@ type rawCommandKeys struct {
 	RunSelected []string `toml:"run_selected"`
 	Up          []string `toml:"up"`
 	Down        []string `toml:"down"`
+	PageUp      []string `toml:"page_up"`
+	PageDown    []string `toml:"page_down"`
+	ScrollUp    []string `toml:"scroll_up"`
+	ScrollDown  []string `toml:"scroll_down"`
 	DeleteChar  []string `toml:"delete_char"`
 	DeleteWord  []string `toml:"delete_word"`
 	ClearInput  []string `toml:"clear_input"`
 }
 
 type rawHelpKeys struct {
-	Close []string `toml:"close"`
-	Up    []string `toml:"up"`
-	Down  []string `toml:"down"`
+	Close      []string `toml:"close"`
+	Up         []string `toml:"up"`
+	Down       []string `toml:"down"`
+	PageUp     []string `toml:"page_up"`
+	PageDown   []string `toml:"page_down"`
+	ScrollUp   []string `toml:"scroll_up"`
+	ScrollDown []string `toml:"scroll_down"`
 }
 
 type rawConfirmKeys struct {
@@ -536,6 +568,10 @@ func mergeBrowseKeys(raw rawBrowseKeys, fallback BrowseKeys) BrowseKeys {
 	keys.ToggleIgnored = mergeKeyList(raw.ToggleIgnored, keys.ToggleIgnored)
 	keys.Up = mergeKeyList(raw.Up, keys.Up)
 	keys.Down = mergeKeyList(raw.Down, keys.Down)
+	keys.PageUp = mergeKeyList(raw.PageUp, keys.PageUp)
+	keys.PageDown = mergeKeyList(raw.PageDown, keys.PageDown)
+	keys.ScrollUp = mergeKeyList(raw.ScrollUp, keys.ScrollUp)
+	keys.ScrollDown = mergeKeyList(raw.ScrollDown, keys.ScrollDown)
 	keys.JumpNextSection = mergeKeyList(raw.JumpNextSection, keys.JumpNextSection)
 	keys.JumpPreviousSection = mergeKeyList(raw.JumpPreviousSection, keys.JumpPreviousSection)
 	keys.DeleteChar = mergeKeyList(raw.DeleteChar, keys.DeleteChar)
@@ -559,6 +595,10 @@ func mergePathSearchKeys(raw rawPathSearchKeys, fallback PathSearchKeys) PathSea
 	keys.ToggleIgnored = mergeKeyList(raw.ToggleIgnored, keys.ToggleIgnored)
 	keys.Up = mergeKeyList(raw.Up, keys.Up)
 	keys.Down = mergeKeyList(raw.Down, keys.Down)
+	keys.PageUp = mergeKeyList(raw.PageUp, keys.PageUp)
+	keys.PageDown = mergeKeyList(raw.PageDown, keys.PageDown)
+	keys.ScrollUp = mergeKeyList(raw.ScrollUp, keys.ScrollUp)
+	keys.ScrollDown = mergeKeyList(raw.ScrollDown, keys.ScrollDown)
 	keys.CompleteNext = mergeKeyList(raw.CompleteNext, keys.CompleteNext)
 	keys.CompletePrevious = mergeKeyList(raw.CompletePrevious, keys.CompletePrevious)
 	keys.AcceptCompletion = mergeKeyList(raw.AcceptCompletion, keys.AcceptCompletion)
@@ -575,6 +615,10 @@ func mergeCommandKeys(raw rawCommandKeys, fallback CommandKeys) CommandKeys {
 	keys.RunSelected = mergeKeyList(raw.RunSelected, keys.RunSelected)
 	keys.Up = mergeKeyList(raw.Up, keys.Up)
 	keys.Down = mergeKeyList(raw.Down, keys.Down)
+	keys.PageUp = mergeKeyList(raw.PageUp, keys.PageUp)
+	keys.PageDown = mergeKeyList(raw.PageDown, keys.PageDown)
+	keys.ScrollUp = mergeKeyList(raw.ScrollUp, keys.ScrollUp)
+	keys.ScrollDown = mergeKeyList(raw.ScrollDown, keys.ScrollDown)
 	keys.DeleteChar = mergeKeyList(raw.DeleteChar, keys.DeleteChar)
 	keys.DeleteWord = mergeKeyList(raw.DeleteWord, keys.DeleteWord)
 	keys.ClearInput = mergeKeyList(raw.ClearInput, keys.ClearInput)
@@ -586,6 +630,10 @@ func mergeHelpKeys(raw rawHelpKeys, fallback HelpKeys) HelpKeys {
 	keys.Close = mergeKeyList(raw.Close, keys.Close)
 	keys.Up = mergeKeyList(raw.Up, keys.Up)
 	keys.Down = mergeKeyList(raw.Down, keys.Down)
+	keys.PageUp = mergeKeyList(raw.PageUp, keys.PageUp)
+	keys.PageDown = mergeKeyList(raw.PageDown, keys.PageDown)
+	keys.ScrollUp = mergeKeyList(raw.ScrollUp, keys.ScrollUp)
+	keys.ScrollDown = mergeKeyList(raw.ScrollDown, keys.ScrollDown)
 	return keys
 }
 
@@ -636,6 +684,10 @@ func defaultKeyBindings() KeyBindings {
 			ToggleIgnored:       []string{"alt+i", "meta+i"},
 			Up:                  []string{"up"},
 			Down:                []string{"down"},
+			PageUp:              []string{"pgup", "ctrl+b"},
+			PageDown:            []string{"pgdown", "ctrl+d"},
+			ScrollUp:            []string{"ctrl+y"},
+			ScrollDown:          []string{"ctrl+e"},
 			JumpNextSection:     []string{"tab"},
 			JumpPreviousSection: []string{"shift+tab"},
 			DeleteChar:          []string{"backspace", "ctrl+h"},
@@ -656,6 +708,10 @@ func defaultKeyBindings() KeyBindings {
 			ToggleIgnored:    []string{"alt+i", "meta+i"},
 			Up:               []string{"up"},
 			Down:             []string{"down"},
+			PageUp:           []string{"pgup", "ctrl+b"},
+			PageDown:         []string{"pgdown", "ctrl+d"},
+			ScrollUp:         []string{"ctrl+y"},
+			ScrollDown:       []string{"ctrl+e"},
 			CompleteNext:     []string{"tab"},
 			CompletePrevious: []string{"shift+tab"},
 			AcceptCompletion: []string{"left", "right"},
@@ -669,14 +725,22 @@ func defaultKeyBindings() KeyBindings {
 			RunSelected: []string{"enter"},
 			Up:          []string{"up"},
 			Down:        []string{"down"},
+			PageUp:      []string{"pgup", "ctrl+b"},
+			PageDown:    []string{"pgdown", "ctrl+d"},
+			ScrollUp:    []string{"ctrl+y"},
+			ScrollDown:  []string{"ctrl+e"},
 			DeleteChar:  []string{"backspace", "ctrl+h"},
 			DeleteWord:  []string{"alt+backspace"},
 			ClearInput:  []string{"ctrl+u", "meta+backspace"},
 		},
 		Help: HelpKeys{
-			Close: []string{"esc", "ctrl+_"},
-			Up:    []string{"up", "k"},
-			Down:  []string{"down", "j"},
+			Close:      []string{"esc", "ctrl+_"},
+			Up:         []string{"up", "k"},
+			Down:       []string{"down", "j"},
+			PageUp:     []string{"pgup", "ctrl+b"},
+			PageDown:   []string{"pgdown", "ctrl+d"},
+			ScrollUp:   []string{"ctrl+y"},
+			ScrollDown: []string{"ctrl+e"},
 		},
 		Confirm: ConfirmKeys{
 			Yes:    []string{"y", "Y"},
@@ -1047,6 +1111,10 @@ func validateKeyBindings(keys KeyBindings) error {
 				{name: "toggle_ignored", keys: keys.Browse.ToggleIgnored},
 				{name: "up", keys: keys.Browse.Up},
 				{name: "down", keys: keys.Browse.Down},
+				{name: "page_up", keys: keys.Browse.PageUp},
+				{name: "page_down", keys: keys.Browse.PageDown},
+				{name: "scroll_up", keys: keys.Browse.ScrollUp},
+				{name: "scroll_down", keys: keys.Browse.ScrollDown},
 				{name: "jump_next_section", keys: keys.Browse.JumpNextSection},
 				{name: "jump_previous_section", keys: keys.Browse.JumpPreviousSection},
 				{name: "delete_char", keys: keys.Browse.DeleteChar},
@@ -1070,6 +1138,10 @@ func validateKeyBindings(keys KeyBindings) error {
 				{name: "toggle_ignored", keys: keys.PathSearch.ToggleIgnored},
 				{name: "up", keys: keys.PathSearch.Up},
 				{name: "down", keys: keys.PathSearch.Down},
+				{name: "page_up", keys: keys.PathSearch.PageUp},
+				{name: "page_down", keys: keys.PathSearch.PageDown},
+				{name: "scroll_up", keys: keys.PathSearch.ScrollUp},
+				{name: "scroll_down", keys: keys.PathSearch.ScrollDown},
 				{name: "complete_next", keys: keys.PathSearch.CompleteNext},
 				{name: "complete_previous", keys: keys.PathSearch.CompletePrevious},
 				{name: "accept_completion", keys: keys.PathSearch.AcceptCompletion},
@@ -1086,6 +1158,10 @@ func validateKeyBindings(keys KeyBindings) error {
 				{name: "run_selected", keys: keys.Commands.RunSelected},
 				{name: "up", keys: keys.Commands.Up},
 				{name: "down", keys: keys.Commands.Down},
+				{name: "page_up", keys: keys.Commands.PageUp},
+				{name: "page_down", keys: keys.Commands.PageDown},
+				{name: "scroll_up", keys: keys.Commands.ScrollUp},
+				{name: "scroll_down", keys: keys.Commands.ScrollDown},
 				{name: "delete_char", keys: keys.Commands.DeleteChar},
 				{name: "delete_word", keys: keys.Commands.DeleteWord},
 				{name: "clear_input", keys: keys.Commands.ClearInput},
@@ -1097,6 +1173,10 @@ func validateKeyBindings(keys KeyBindings) error {
 				{name: "close", keys: keys.Help.Close},
 				{name: "up", keys: keys.Help.Up},
 				{name: "down", keys: keys.Help.Down},
+				{name: "page_up", keys: keys.Help.PageUp},
+				{name: "page_down", keys: keys.Help.PageDown},
+				{name: "scroll_up", keys: keys.Help.ScrollUp},
+				{name: "scroll_down", keys: keys.Help.ScrollDown},
 			},
 		},
 		{

@@ -483,6 +483,124 @@ func TestCursorMovementScrollsCandidateList(t *testing.T) {
 	}
 }
 
+func TestBrowseScrollAndPageKeys(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.height = 14
+	for i := 0; i < 10; i++ {
+		model.sessions = append(model.sessions, tmux.Session{Name: fmt.Sprintf("session-%02d", i)})
+	}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlE})
+	model = updated.(Model)
+	if model.scroll != 1 || model.cursor != 1 {
+		t.Fatalf("after ctrl+e scroll=%d cursor=%d, want 1/1", model.scroll, model.cursor)
+	}
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlY})
+	model = updated.(Model)
+	if model.scroll != 0 || model.cursor != 1 {
+		t.Fatalf("after ctrl+y scroll=%d cursor=%d, want 0/1", model.scroll, model.cursor)
+	}
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlD})
+	model = updated.(Model)
+	if model.cursor != 3 {
+		t.Fatalf("after ctrl+d cursor=%d, want 3", model.cursor)
+	}
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlB})
+	model = updated.(Model)
+	if model.cursor != 1 {
+		t.Fatalf("after ctrl+b cursor=%d, want 1", model.cursor)
+	}
+}
+
+func TestPathSearchScrollAndPageKeys(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.mode = modePathSearch
+	model.height = 14
+	for i := 0; i < 10; i++ {
+		name := fmt.Sprintf("path-%02d", i)
+		model.pathResult = append(model.pathResult, candidate{kind: candidatePath, fsPath: pathsearch.Candidate{Name: name, Path: "/tmp/" + name}})
+	}
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlE})
+	model = updated.(Model)
+	if model.pathScroll != 1 || model.pathCursor != 1 {
+		t.Fatalf("after ctrl+e pathScroll=%d pathCursor=%d, want 1/1", model.pathScroll, model.pathCursor)
+	}
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlD})
+	model = updated.(Model)
+	if model.pathCursor != 3 {
+		t.Fatalf("after ctrl+d pathCursor=%d, want 3", model.pathCursor)
+	}
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlB})
+	model = updated.(Model)
+	if model.pathCursor != 1 {
+		t.Fatalf("after ctrl+b pathCursor=%d, want 1", model.pathCursor)
+	}
+}
+
+func TestCommandPaletteScrollAndPageKeys(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.width = 100
+	model.height = 20
+	model.openCommands(modeBrowse)
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlE})
+	model = updated.(Model)
+	if model.commandScroll != 1 || model.commandCursor != 1 {
+		t.Fatalf("after ctrl+e commandScroll=%d commandCursor=%d, want 1/1", model.commandScroll, model.commandCursor)
+	}
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlY})
+	model = updated.(Model)
+	if model.commandScroll != 0 || model.commandCursor != 1 {
+		t.Fatalf("after ctrl+y commandScroll=%d commandCursor=%d, want 0/1", model.commandScroll, model.commandCursor)
+	}
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlD})
+	model = updated.(Model)
+	if model.commandCursor <= 1 {
+		t.Fatalf("after ctrl+d commandCursor=%d, want movement by more than one row", model.commandCursor)
+	}
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlB})
+	model = updated.(Model)
+	if model.commandCursor != 1 {
+		t.Fatalf("after ctrl+b commandCursor=%d, want 1", model.commandCursor)
+	}
+}
+
+func TestHelpScrollAndPageKeys(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.width = 100
+	model.height = 18
+	model.openHelp(modeBrowse)
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlE})
+	model = updated.(Model)
+	if model.helpScroll != 1 || model.helpCursor != 1 {
+		t.Fatalf("after ctrl+e helpScroll=%d helpCursor=%d, want 1/1", model.helpScroll, model.helpCursor)
+	}
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlD})
+	model = updated.(Model)
+	if model.helpCursor != 3 {
+		t.Fatalf("after ctrl+d helpCursor=%d, want 3", model.helpCursor)
+	}
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlB})
+	model = updated.(Model)
+	if model.helpCursor != 1 {
+		t.Fatalf("after ctrl+b helpCursor=%d, want 1", model.helpCursor)
+	}
+}
+
 func TestBrowseCursorStaysRenderedWhenMovingBelowViewport(t *testing.T) {
 	model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
 	model.width = 100
@@ -1835,7 +1953,7 @@ func TestPathSearchHelpRendersModeSpecificContent(t *testing.T) {
 	model.mode = modeHelp
 	model.previousMode = modePathSearch
 	model.width = 80
-	model.height = 24
+	model.height = 34
 
 	view := model.View()
 	if !strings.Contains(view, "Path Search") || !strings.Contains(view, "<c-p>") || !strings.Contains(view, "<c-a>") {

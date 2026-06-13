@@ -40,6 +40,24 @@ func TestDefaultComesFromEmbeddedTOML(t *testing.T) {
 	if cfg.UI.Dialogs.Small.Width != 72 || cfg.UI.Dialogs.Small.Height != 9 || cfg.UI.Dialogs.Panel.Width != 88 || cfg.UI.Dialogs.Panel.Height != 0 {
 		t.Fatalf("dialog defaults not applied: %#v", cfg.UI.Dialogs)
 	}
+	if got := strings.Join(cfg.UI.Keys.Browse.PageUp, ","); got != "pgup,ctrl+b" {
+		t.Fatalf("browse page_up = %q, want pgup,ctrl+b", got)
+	}
+	if got := strings.Join(cfg.UI.Keys.Browse.PageDown, ","); got != "pgdown,ctrl+d" {
+		t.Fatalf("browse page_down = %q, want pgdown,ctrl+d", got)
+	}
+	if got := strings.Join(cfg.UI.Keys.Browse.ScrollUp, ","); got != "ctrl+y" {
+		t.Fatalf("browse scroll_up = %q, want ctrl+y", got)
+	}
+	if got := strings.Join(cfg.UI.Keys.Browse.ScrollDown, ","); got != "ctrl+e" {
+		t.Fatalf("browse scroll_down = %q, want ctrl+e", got)
+	}
+	if got := strings.Join(cfg.UI.Keys.PathSearch.OpenTyped, ","); got != "ctrl+p" {
+		t.Fatalf("path search open_typed = %q, want ctrl+p", got)
+	}
+	if got := strings.Join(cfg.UI.Keys.Browse.RenameSession, ","); got != "ctrl+n" {
+		t.Fatalf("browse rename_session = %q, want ctrl+n", got)
+	}
 	if !cfg.Discovery.SkipHidden {
 		t.Fatalf("skip_hidden = false, want embedded default true")
 	}
@@ -169,7 +187,7 @@ func TestLoadFileRejectsDuplicateUIKeyBindingsInSameContext(t *testing.T) {
 	writeFile(t, path, `
 [ui.keys.browse]
 open_selected = ["ctrl+o"]
-reload = ["ctrl+o"]
+page_down = ["ctrl+o"]
 `)
 	_, err := LoadFile(path)
 	if err == nil {
