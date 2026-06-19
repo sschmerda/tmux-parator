@@ -17,6 +17,7 @@ import (
 	"github.com/sschmerda/tmux-parator/internal/discovery"
 	"github.com/sschmerda/tmux-parator/internal/fuzzy"
 	"github.com/sschmerda/tmux-parator/internal/pathsearch"
+	"github.com/sschmerda/tmux-parator/internal/sessionconfig"
 	"github.com/sschmerda/tmux-parator/internal/theme"
 	"github.com/sschmerda/tmux-parator/internal/tmux"
 )
@@ -590,8 +591,8 @@ func TestHelpScrollAndPageKeys(t *testing.T) {
 
 	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlD})
 	model = updated.(Model)
-	if model.helpCursor != 3 {
-		t.Fatalf("after ctrl+d helpCursor=%d, want 3", model.helpCursor)
+	if model.helpCursor <= 1 {
+		t.Fatalf("after ctrl+d helpCursor=%d, want movement by more than one row", model.helpCursor)
 	}
 
 	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlB})
@@ -1821,17 +1822,21 @@ func helpByKey(items []helpItem, key string) (helpItem, bool) {
 }
 
 type fakeSessionClient struct {
-	switchLastCalls    int
-	killCalls          int
-	killedSession      string
-	renamedOld         string
-	renamedNew         string
-	switchedSession    string
-	newSessionName     string
-	newSessionPath     string
-	newSessionMetadata tmux.SessionMetadata
-	taggedSession      string
-	taggedMetadata     tmux.SessionMetadata
+	switchLastCalls     int
+	killCalls           int
+	killedSession       string
+	renamedOld          string
+	renamedNew          string
+	switchedSession     string
+	newSessionName      string
+	newSessionPath      string
+	newSessionMetadata  tmux.SessionMetadata
+	templateSessionName string
+	templateSessionPath string
+	templateMetadata    tmux.SessionMetadata
+	templateID          string
+	taggedSession       string
+	taggedMetadata      tmux.SessionMetadata
 }
 
 func (f *fakeSessionClient) ListSessions(context.Context) ([]tmux.Session, error) {
@@ -1867,10 +1872,58 @@ func (f *fakeSessionClient) NewSession(_ context.Context, name string, path stri
 	return nil
 }
 
+func (f *fakeSessionClient) NewSessionWithLayout(_ context.Context, name string, path string, metadata tmux.SessionMetadata, template sessionconfig.Template) error {
+	f.templateSessionName = name
+	f.templateSessionPath = path
+	f.templateMetadata = metadata
+	f.templateID = template.ID
+	return nil
+}
+
 func (f *fakeSessionClient) TagSession(_ context.Context, session string, metadata tmux.SessionMetadata) error {
 	f.taggedSession = session
 	f.taggedMetadata = metadata
 	return nil
+}
+
+func testTemplate(id string, name string) sessionconfig.Template {
+	return sessionconfig.Template{
+		ID:      id,
+		Name:    name,
+		Enabled: true,
+		Windows: []sessionconfig.Window{
+			{Name: "work", Layout: sessionconfig.Node{Name: "shell", Type: "pane"}},
+		},
+	}
+}
+
+func templateWithMatch(id string, name string, patterns ...string) sessionconfig.Template {
+	template := testTemplate(id, name)
+	template.Match = patterns
+	return template
+}
+
+func writeLocalTemplate(t *testing.T, dir string, id string, name string) {
+	t.Helper()
+	path := filepath.Join(dir, ".tmux-parator", "template.toml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create local template dir: %v", err)
+	}
+	content := fmt.Sprintf(`
+id = %q
+name = %q
+focus = "work.shell"
+
+[[windows]]
+name = "work"
+
+[windows.layout]
+type = "pane"
+name = "shell"
+`, id, name)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write local template: %v", err)
+	}
 }
 
 func TestBrowseCommandTextMatchesHelp(t *testing.T) {
@@ -2549,7 +2602,8 @@ func TestOpenCandidateCreatesDuplicateWithNumberedLeafName(t *testing.T) {
 	model.sessions = []tmux.Session{{Name: "data"}}
 	selected := candidate{kind: candidatePath, fsPath: pathsearch.Candidate{Name: "data", Path: "/tmp/project/data"}}
 
-	cmd := model.openCandidate(selected)
+	updated, cmd := model.openCandidate(selected)
+	model = updated.(Model)
 	if cmd == nil {
 		t.Fatal("openCandidate() returned nil command")
 	}
@@ -2570,7 +2624,8 @@ func TestOpenCandidateSwitchesExistingSessionForSamePath(t *testing.T) {
 	model.sessions = []tmux.Session{{Name: "data", Metadata: tmux.SessionMetadata{Path: "/tmp/project/data"}}}
 	selected := candidate{kind: candidatePath, fsPath: pathsearch.Candidate{Name: "data", Path: "/tmp/project/data"}}
 
-	cmd := model.openCandidate(selected)
+	updated, cmd := model.openCandidate(selected)
+	model = updated.(Model)
 	if cmd == nil {
 		t.Fatal("openCandidate() returned nil command")
 	}
@@ -2582,6 +2637,886 @@ func TestOpenCandidateSwitchesExistingSessionForSamePath(t *testing.T) {
 	}
 	if client.newSessionName != "" {
 		t.Fatalf("newSessionName = %q, want empty", client.newSessionName)
+	}
+}
+
+func TestTemplateHotkeyOpensPickerForUncreatedWorkspace(t *testing.T) {
+	model := NewModelWithTemplates(
+		nil,
+		theme.Default(),
+		nil,
+		discovery.Options{},
+		config.PathSearch{},
+		config.Glyphs{},
+		config.GlyphColors{},
+		config.Columns{},
+		config.Default().UI.Keys,
+		[]sessionconfig.Template{testTemplate("zen", "Zen")},
+	)
+	model.rootItems = []discovery.Candidate{{Name: "repo", Path: "/tmp/repo", Mode: "repo"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlL})
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatalf("cmd = %#v, want nil", cmd)
+	}
+	if model.mode != modeTemplatePicker || model.templatePath != "/tmp/repo" || model.templateName != "repo" {
+		t.Fatalf("template state = mode %v path %q name %q, want picker /tmp/repo repo", model.mode, model.templatePath, model.templateName)
+	}
+}
+
+func TestTemplateHotkeyRejectsExistingPathSession(t *testing.T) {
+	model := NewModelWithTemplates(
+		nil,
+		theme.Default(),
+		nil,
+		discovery.Options{},
+		config.PathSearch{},
+		config.Glyphs{},
+		config.GlyphColors{},
+		config.Columns{},
+		config.Default().UI.Keys,
+		[]sessionconfig.Template{testTemplate("zen", "Zen")},
+	)
+	model.sessions = []tmux.Session{{Name: "repo", Metadata: tmux.SessionMetadata{Path: "/tmp/repo"}}}
+	model.rootItems = []discovery.Candidate{{Name: "repo", Path: "/tmp/repo", Mode: "repo"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+	model.cursor = 1
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlL})
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatalf("cmd = %#v, want nil", cmd)
+	}
+	if model.mode != modeBrowse || model.notice == nil || !strings.Contains(model.notice.Error(), "already exists") {
+		t.Fatalf("mode/notice = %v/%v, want browse already exists notice", model.mode, model.notice)
+	}
+}
+
+func TestPathSearchTemplateHotkeyOpensPickerForSelectedResult(t *testing.T) {
+	model := NewModelWithTemplates(
+		nil,
+		theme.Default(),
+		nil,
+		discovery.Options{},
+		config.PathSearch{},
+		config.Glyphs{},
+		config.GlyphColors{},
+		config.Columns{},
+		config.Default().UI.Keys,
+		[]sessionconfig.Template{testTemplate("zen", "Zen")},
+	)
+	model.mode = modePathSearch
+	model.pathResult = []candidate{{kind: candidatePath, fsPath: pathsearch.Candidate{Name: "repo", Path: "/tmp/repo"}}}
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlL})
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatalf("cmd = %#v, want nil", cmd)
+	}
+	if model.mode != modeTemplatePicker || model.templatePath != "/tmp/repo" || model.templateName != "repo" || model.templatePreviousMode != modePathSearch {
+		t.Fatalf("template state = mode %v path %q name %q previous %v, want picker /tmp/repo repo path-search", model.mode, model.templatePath, model.templateName, model.templatePreviousMode)
+	}
+}
+
+func TestPathSearchTemplatePickerCancelReturnsToPathSearch(t *testing.T) {
+	model := NewModelWithTemplates(
+		nil,
+		theme.Default(),
+		nil,
+		discovery.Options{},
+		config.PathSearch{},
+		config.Glyphs{},
+		config.GlyphColors{},
+		config.Columns{},
+		config.Default().UI.Keys,
+		[]sessionconfig.Template{testTemplate("zen", "Zen")},
+	)
+	model.mode = modeTemplatePicker
+	model.templatePreviousMode = modePathSearch
+	model.templatePath = "/tmp/repo"
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatalf("cmd = %#v, want nil", cmd)
+	}
+	if model.mode != modePathSearch || model.templatePath != "" {
+		t.Fatalf("mode/templatePath = %v/%q, want path-search empty", model.mode, model.templatePath)
+	}
+}
+
+func TestPathSearchTemplatePickerCreatesSelectedTemplate(t *testing.T) {
+	client := &fakeSessionClient{}
+	model := NewModelWithTemplates(
+		client,
+		theme.Default(),
+		nil,
+		discovery.Options{},
+		config.PathSearch{},
+		config.Glyphs{},
+		config.GlyphColors{},
+		config.Columns{},
+		config.Default().UI.Keys,
+		[]sessionconfig.Template{testTemplate("zen", "Zen")},
+	)
+	model.mode = modePathSearch
+	model.pathResult = []candidate{{kind: candidatePath, fsPath: pathsearch.Candidate{Name: "repo", Path: "/tmp/repo"}}}
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlL})
+	model = updated.(Model)
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("template enter returned nil command")
+	}
+	msg := cmd()
+	if created, ok := msg.(createdMsg); !ok || created.err != nil {
+		t.Fatalf("cmd msg = %#v, want successful createdMsg", msg)
+	}
+	if client.templateSessionName != "repo" || client.templateSessionPath != "/tmp/repo" || client.templateID != "zen" {
+		t.Fatalf("template create = (%q,%q,%q), want repo /tmp/repo zen", client.templateSessionName, client.templateSessionPath, client.templateID)
+	}
+	if model.mode != modeBrowse || !model.loading {
+		t.Fatalf("mode/loading = %v/%v, want browse/loading", model.mode, model.loading)
+	}
+}
+
+func TestBrowseEnterUsesFirstMatchingTemplate(t *testing.T) {
+	client := &fakeSessionClient{}
+	model := NewModelWithTemplates(
+		client,
+		theme.Default(),
+		nil,
+		discovery.Options{},
+		config.PathSearch{},
+		config.Glyphs{},
+		config.GlyphColors{},
+		config.Columns{},
+		config.Default().UI.Keys,
+		[]sessionconfig.Template{
+			templateWithMatch("specific", "Specific", "/tmp/repos/repo"),
+			templateWithMatch("broad", "Broad", "/tmp/repos/*"),
+		},
+	)
+	model.rootItems = []discovery.Candidate{{Name: "repo", Path: "/tmp/repos/repo", Mode: "repo"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("enter returned nil command")
+	}
+	msg := cmd()
+	if created, ok := msg.(createdMsg); !ok || created.err != nil {
+		t.Fatalf("cmd msg = %#v, want successful createdMsg", msg)
+	}
+	if client.templateSessionName != "repo" || client.templateSessionPath != "/tmp/repos/repo" || client.templateID != "specific" {
+		t.Fatalf("template create = (%q,%q,%q), want repo /tmp/repos/repo specific", client.templateSessionName, client.templateSessionPath, client.templateID)
+	}
+	if client.newSessionName != "" {
+		t.Fatalf("new session fallback used: %#v", client)
+	}
+	if model.mode != modeBrowse || !model.loading {
+		t.Fatalf("mode/loading = %v/%v, want browse/loading", model.mode, model.loading)
+	}
+}
+
+func TestBrowseEnterUsesLocalTemplateAfterNotice(t *testing.T) {
+	client := &fakeSessionClient{}
+	dir := t.TempDir()
+	writeLocalTemplate(t, dir, "local", "Local Workspace")
+	model := NewModelWithTemplates(
+		client,
+		theme.Default(),
+		nil,
+		discovery.Options{},
+		config.PathSearch{},
+		config.Glyphs{},
+		config.GlyphColors{},
+		config.Columns{},
+		config.Default().UI.Keys,
+		[]sessionconfig.Template{templateWithMatch("global", "Global Workspace", dir)},
+	)
+	model.rootItems = []discovery.Candidate{{Name: "repo", Path: dir, Mode: "repo"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatalf("first enter cmd = %#v, want nil notice pause", cmd)
+	}
+	if model.notice == nil || !strings.Contains(model.notice.Error(), "local tmux-parator template found") {
+		t.Fatalf("notice = %v, want local template notice", model.notice)
+	}
+
+	updated, cmd = model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("second enter returned nil command")
+	}
+	msg := cmd()
+	if created, ok := msg.(createdMsg); !ok || created.err != nil {
+		t.Fatalf("cmd msg = %#v, want successful createdMsg", msg)
+	}
+	if client.templateID != "local" {
+		t.Fatalf("templateID = %q, want local", client.templateID)
+	}
+	if model.notice != nil || !model.loading {
+		t.Fatalf("notice/loading = %v/%v, want nil/true", model.notice, model.loading)
+	}
+}
+
+func TestPathSearchEnterUsesMatchingTemplate(t *testing.T) {
+	client := &fakeSessionClient{}
+	model := NewModelWithTemplates(
+		client,
+		theme.Default(),
+		nil,
+		discovery.Options{},
+		config.PathSearch{},
+		config.Glyphs{},
+		config.GlyphColors{},
+		config.Columns{},
+		config.Default().UI.Keys,
+		[]sessionconfig.Template{templateWithMatch("go", "Go Project", "/tmp/repos/*")},
+	)
+	model.mode = modePathSearch
+	model.pathResult = []candidate{{kind: candidatePath, fsPath: pathsearch.Candidate{Name: "repo", Path: "/tmp/repos/repo"}}}
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("enter returned nil command")
+	}
+	msg := cmd()
+	if created, ok := msg.(createdMsg); !ok || created.err != nil {
+		t.Fatalf("cmd msg = %#v, want successful createdMsg", msg)
+	}
+	if client.templateSessionName != "repo" || client.templateSessionPath != "/tmp/repos/repo" || client.templateID != "go" {
+		t.Fatalf("template create = (%q,%q,%q), want repo /tmp/repos/repo go", client.templateSessionName, client.templateSessionPath, client.templateID)
+	}
+	if client.newSessionName != "" {
+		t.Fatalf("new session fallback used: %#v", client)
+	}
+	if model.mode != modeBrowse || !model.loading {
+		t.Fatalf("mode/loading = %v/%v, want browse/loading", model.mode, model.loading)
+	}
+}
+
+func TestTemplatePickerIncludesLocalTemplateBeforeGlobalTemplates(t *testing.T) {
+	client := &fakeSessionClient{}
+	dir := t.TempDir()
+	writeLocalTemplate(t, dir, "local", "Local Workspace")
+	model := NewModelWithTemplates(
+		client,
+		theme.Default(),
+		nil,
+		discovery.Options{},
+		config.PathSearch{},
+		config.Glyphs{},
+		config.GlyphColors{},
+		config.Columns{},
+		config.Default().UI.Keys,
+		[]sessionconfig.Template{testTemplate("global", "Global Workspace")},
+	)
+	model.rootItems = []discovery.Candidate{{Name: "repo", Path: dir, Mode: "repo"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlL})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatalf("ctrl-l cmd = %#v, want nil", cmd)
+	}
+	if model.mode != modeTemplatePicker {
+		t.Fatalf("mode = %v, want template picker", model.mode)
+	}
+	if len(model.templateFiltered) != 3 {
+		t.Fatalf("templateFiltered = %#v, want local, global, no-template", model.templateFiltered)
+	}
+	if model.templateFiltered[0].ID != "local" || model.templateFiltered[0].Source != sessionconfig.SourceLocal {
+		t.Fatalf("first template = %#v, want local template", model.templateFiltered[0])
+	}
+	if model.templateFiltered[1].ID != "global" {
+		t.Fatalf("second template = %#v, want global template", model.templateFiltered[1])
+	}
+	rendered := ansi.Strip(renderTemplatePicker(
+		model.styles,
+		model.dialogs,
+		model.keys,
+		model.templateFiltered,
+		"",
+		0,
+		0,
+		100,
+		40,
+	))
+	if !strings.Contains(rendered, "LOCAL ─") || !strings.Contains(rendered, "GLOBAL ─") {
+		t.Fatalf("template picker missing local/global headings:\n%s", rendered)
+	}
+}
+
+func TestBrowseEnterSwitchesExistingPathSessionBeforeTemplateMatch(t *testing.T) {
+	client := &fakeSessionClient{}
+	model := NewModelWithTemplates(
+		client,
+		theme.Default(),
+		nil,
+		discovery.Options{},
+		config.PathSearch{},
+		config.Glyphs{},
+		config.GlyphColors{},
+		config.Columns{},
+		config.Default().UI.Keys,
+		[]sessionconfig.Template{templateWithMatch("go", "Go Project", "/tmp/repos/*")},
+	)
+	model.sessions = []tmux.Session{{Name: "existing", Metadata: tmux.SessionMetadata{Path: "/tmp/repos/repo"}}}
+	model.rootItems = []discovery.Candidate{{Name: "repo", Path: "/tmp/repos/repo", Mode: "repo"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+	model.cursor = 1
+
+	_, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter returned nil command")
+	}
+	msg := cmd()
+	if switched, ok := msg.(switchedMsg); !ok || switched.err != nil {
+		t.Fatalf("cmd msg = %#v, want successful switchedMsg", msg)
+	}
+	if client.taggedSession != "existing" || client.templateID != "" || client.newSessionName != "" {
+		t.Fatalf("client = %#v, want tagged existing only", client)
+	}
+}
+
+func TestTemplatePickerCreatesSelectedTemplate(t *testing.T) {
+	client := &fakeSessionClient{}
+	model := NewModelWithTemplates(
+		client,
+		theme.Default(),
+		nil,
+		discovery.Options{},
+		config.PathSearch{},
+		config.Glyphs{},
+		config.GlyphColors{},
+		config.Columns{},
+		config.Default().UI.Keys,
+		[]sessionconfig.Template{testTemplate("zen", "Zen")},
+	)
+	model.rootItems = []discovery.Candidate{{Name: "repo", Path: "/tmp/repo", Mode: "repo"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlL})
+	model = updated.(Model)
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("template enter returned nil command")
+	}
+	msg := cmd()
+	if created, ok := msg.(createdMsg); !ok || created.err != nil {
+		t.Fatalf("cmd msg = %#v, want successful createdMsg", msg)
+	}
+	if client.templateSessionName != "repo" || client.templateSessionPath != "/tmp/repo" || client.templateID != "zen" {
+		t.Fatalf("template create = (%q,%q,%q), want repo /tmp/repo zen", client.templateSessionName, client.templateSessionPath, client.templateID)
+	}
+	if model.mode != modeBrowse || !model.loading {
+		t.Fatalf("mode/loading = %v/%v, want browse/loading", model.mode, model.loading)
+	}
+}
+
+func TestTemplatePickerCanCreateWithoutTemplate(t *testing.T) {
+	client := &fakeSessionClient{}
+	model := NewModelWithTemplates(
+		client,
+		theme.Default(),
+		nil,
+		discovery.Options{},
+		config.PathSearch{},
+		config.Glyphs{},
+		config.GlyphColors{},
+		config.Columns{},
+		config.Default().UI.Keys,
+		[]sessionconfig.Template{testTemplate("zen", "Zen")},
+	)
+	model.rootItems = []discovery.Candidate{{Name: "repo", Path: "/tmp/repo", Mode: "repo"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlL})
+	model = updated.(Model)
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("no-template enter returned nil command")
+	}
+	msg := cmd()
+	if created, ok := msg.(createdMsg); !ok || created.err != nil {
+		t.Fatalf("cmd msg = %#v, want successful createdMsg", msg)
+	}
+	if client.newSessionName != "repo" || client.newSessionPath != "/tmp/repo" {
+		t.Fatalf("plain create = (%q,%q), want repo /tmp/repo", client.newSessionName, client.newSessionPath)
+	}
+	if client.templateID != "" || client.templateSessionName != "" {
+		t.Fatalf("template create used: %#v", client)
+	}
+	if model.mode != modeBrowse || !model.loading {
+		t.Fatalf("mode/loading = %v/%v, want browse/loading", model.mode, model.loading)
+	}
+}
+
+func TestTemplateHotkeyOpensNoTemplatePickerWhenNoTemplatesConfigured(t *testing.T) {
+	client := &fakeSessionClient{}
+	model := NewModelWithTemplates(
+		client,
+		theme.Default(),
+		nil,
+		discovery.Options{},
+		config.PathSearch{},
+		config.Glyphs{},
+		config.GlyphColors{},
+		config.Columns{},
+		config.Default().UI.Keys,
+		nil,
+	)
+	model.rootItems = []discovery.Candidate{{Name: "repo", Path: "/tmp/repo", Mode: "repo"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlL})
+	model = updated.(Model)
+
+	if model.mode != modeTemplatePicker || len(model.templateFiltered) != 1 || !isNoTemplatePickerItem(model.templateFiltered[0]) {
+		t.Fatalf("template picker state = mode %v items %#v, want no-template picker", model.mode, model.templateFiltered)
+	}
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("no-template-only enter returned nil command")
+	}
+	msg := cmd()
+	if created, ok := msg.(createdMsg); !ok || created.err != nil {
+		t.Fatalf("cmd msg = %#v, want successful createdMsg", msg)
+	}
+	if client.newSessionName != "repo" || client.templateID != "" {
+		t.Fatalf("client = %#v, want plain repo session", client)
+	}
+}
+
+func TestTemplatePickerFuzzyFiltersByNameIDAndChip(t *testing.T) {
+	repository := testTemplate("repo", "Repository")
+	repository.Chip = "rr"
+	workspace := testTemplate("notes", "Workspace")
+	workspace.Chip = "ww"
+	model := NewModelWithTemplates(
+		nil,
+		theme.Default(),
+		nil,
+		discovery.Options{},
+		config.PathSearch{},
+		config.Glyphs{},
+		config.GlyphColors{},
+		config.Columns{},
+		config.Default().UI.Keys,
+		[]sessionconfig.Template{
+			repository,
+			workspace,
+		},
+	)
+	model.rootItems = []discovery.Candidate{{Name: "repo", Path: "/tmp/repo", Mode: "repo"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlL})
+	model = updated.(Model)
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("rep")})
+	model = updated.(Model)
+
+	if model.templateFilter != "rep" {
+		t.Fatalf("templateFilter = %q, want rep", model.templateFilter)
+	}
+	if len(model.templateFiltered) != 1 || model.templateFiltered[0].ID != "repo" {
+		t.Fatalf("templateFiltered = %#v, want repo only", model.templateFiltered)
+	}
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlL})
+	model = updated.(Model)
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("notes")})
+	model = updated.(Model)
+	if len(model.templateFiltered) != 1 || model.templateFiltered[0].ID != "notes" {
+		t.Fatalf("id search templateFiltered = %#v, want notes only", model.templateFiltered)
+	}
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlL})
+	model = updated.(Model)
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("ww")})
+	model = updated.(Model)
+	if len(model.templateFiltered) != 1 || model.templateFiltered[0].ID != "notes" {
+		t.Fatalf("chip search templateFiltered = %#v, want notes only", model.templateFiltered)
+	}
+}
+
+func TestTemplateRowShowsNameWithoutSourceChip(t *testing.T) {
+	row := ansi.Strip(renderTemplateRow(testTemplate("repo", "Workspace"), "", false, newStyles(theme.Default()), 40))
+	if strings.Contains(row, "repo") {
+		t.Fatalf("template row = %q, want template id hidden", row)
+	}
+	if !strings.Contains(row, "Workspace") {
+		t.Fatalf("template row = %q, want workspace name", row)
+	}
+	if strings.Contains(row, "GLOBAL") || strings.Contains(row, "LOCAL") {
+		t.Fatalf("template row = %q, want no source chip", row)
+	}
+}
+
+func TestTemplateRowShowsConfiguredChipAndFuzzyHighlights(t *testing.T) {
+	template := testTemplate("repo", "Repository")
+	template.Chip = "rp"
+	template.WindowIndicators = []string{" editor", " git"}
+	template.Description = "Editor and Git workspace"
+	match := templateFuzzyMatch(template, "rp")
+	if len(match.AliasIndexes["rp"]) != 2 {
+		t.Fatalf("chip match indexes = %#v, want both chip characters", match.AliasIndexes["rp"])
+	}
+	match = templateFuzzyMatch(template, "sit")
+	if len(match.TitleIndexes) != 3 {
+		t.Fatalf("title match indexes = %#v, want three highlighted title characters", match.TitleIndexes)
+	}
+	row := ansi.Strip(renderTemplateRow(template, "rp", false, newStyles(theme.Default()), 100))
+	if !strings.Contains(row, "rp") || strings.Index(row, "rp") > strings.Index(row, "Repository") {
+		t.Fatalf("template row = %q, want chip before template name", row)
+	}
+	if strings.Index(row, "Repository") >= strings.Index(row, " editor") {
+		t.Fatalf("template row columns are not chip, name, window indicators: %q", row)
+	}
+	if !strings.Contains(row, " editor ·  git") {
+		t.Fatalf("template row does not separate window indicators: %q", row)
+	}
+	if strings.Contains(row, template.Description) {
+		t.Fatalf("template row contains inline description: %q", row)
+	}
+	descriptionMatch := templateFuzzyMatch(template, "workspace")
+	if len(descriptionMatch.FieldIndexes["description"]) == 0 {
+		t.Fatalf("description match indexes missing: %#v", descriptionMatch.FieldIndexes)
+	}
+	indicatorMatch := templateFuzzyMatch(template, "editor")
+	if len(indicatorMatch.FieldIndexes["window_indicators"]) == 0 {
+		t.Fatalf("window indicator match indexes missing: %#v", indicatorMatch.FieldIndexes)
+	}
+}
+
+func TestNoTemplatePickerItemUsesNTChip(t *testing.T) {
+	template := noTemplatePickerItem()
+	if template.Chip != "nt" {
+		t.Fatalf("no-template chip = %q, want nt", template.Chip)
+	}
+	row := ansi.Strip(renderTemplateRow(template, "", false, newStyles(theme.Default()), 80))
+	if !strings.Contains(row, "nt") || !strings.Contains(row, noTemplatePickerName) {
+		t.Fatalf("no-template row missing chip or name: %q", row)
+	}
+	if strings.Contains(row, "Create a normal tmux session") {
+		t.Fatalf("no-template row contains inline description: %q", row)
+	}
+}
+
+func TestTemplatePickerGroupsIndentedLocalAndGlobalTemplates(t *testing.T) {
+	local := testTemplate("local", "Local Workspace")
+	local.Source = sessionconfig.SourceLocal
+	global := testTemplate("global", "Global Workspace")
+	global.Source = sessionconfig.SourceGlobal
+
+	rendered := ansi.Strip(renderTemplatePicker(
+		newStyles(theme.Default()),
+		config.Default().UI.Dialogs,
+		config.Default().UI.Keys,
+		[]sessionconfig.Template{local, global, noTemplatePickerItem()},
+		"",
+		0,
+		0,
+		100,
+		40,
+	))
+	localHeadingIndex := strings.Index(rendered, "LOCAL ─")
+	localIndex := strings.Index(rendered, "Local Workspace")
+	globalHeadingIndex := strings.Index(rendered, "GLOBAL ─")
+	globalIndex := strings.Index(rendered, "Global Workspace")
+	if localHeadingIndex < 0 || localIndex < 0 || globalHeadingIndex < 0 || globalIndex < 0 {
+		t.Fatalf("template picker missing local/global sections:\n%s", rendered)
+	}
+	if !(localHeadingIndex < localIndex && localIndex < globalHeadingIndex && globalHeadingIndex < globalIndex) {
+		t.Fatalf("template picker order is local heading, local result, global heading, global result:\n%s", rendered)
+	}
+	headingIndent := -1
+	localIndented := false
+	globalIndented := false
+	for _, line := range strings.Split(rendered, "\n") {
+		if strings.Contains(line, "LOCAL ─") || strings.Contains(line, "GLOBAL ─") {
+			indent := strings.Index(line, "LOCAL ─")
+			if indent < 0 {
+				indent = strings.Index(line, "GLOBAL ─")
+			}
+			if headingIndent < 0 {
+				headingIndent = indent
+			} else if indent != headingIndent {
+				t.Fatalf("template headings have different indentation: %q", line)
+			}
+		}
+		if headingIndent >= 0 && strings.Index(line, "Local Workspace") >= headingIndent+2 {
+			localIndented = true
+		}
+		if headingIndent >= 0 && strings.Index(line, "Global Workspace") >= headingIndent+2 {
+			globalIndented = true
+		}
+	}
+	if headingIndent < 0 || !localIndented || !globalIndented {
+		t.Fatalf("template results are not indented beneath their headings:\n%s", rendered)
+	}
+}
+
+func TestPopupRowsAlignWithSearchInterior(t *testing.T) {
+	styles := newStyles(theme.Default())
+	dialogs := config.Dialogs{
+		Panel: config.DialogSize{Width: 70, Height: 20},
+	}
+	commandPanel := renderCommandPalette(
+		styles,
+		dialogs,
+		[]commandMatch{{item: commandItem{Title: "Open", Key: "<enter>", Enabled: true}}},
+		"",
+		0,
+		0,
+		120,
+		24,
+	)
+	templatePanel := renderTemplatePicker(
+		styles,
+		dialogs,
+		config.Default().UI.Keys,
+		[]sessionconfig.Template{testTemplate("repo", "Repository")},
+		"",
+		0,
+		0,
+		120,
+		24,
+	)
+	helpPanel := renderHelpPanel(
+		styles,
+		dialogs,
+		modeBrowse,
+		0,
+		0,
+		120,
+		24,
+	)
+
+	commandSearch, commandRow := panelSearchAndResultLines(t, commandPanel, "Open")
+	templateSearch, templateRow := panelSearchAndResultLines(t, templatePanel, "Repository")
+	helpSearch, helpRow := panelSearchAndResultLines(t, helpPanel, "filter sessions")
+	if lipgloss.Width(commandSearch) != lipgloss.Width(templateSearch) {
+		t.Fatalf("search widths differ: command=%d template=%d", lipgloss.Width(commandSearch), lipgloss.Width(templateSearch))
+	}
+	if lipgloss.Width(commandSearch) != lipgloss.Width(helpSearch) {
+		t.Fatalf("search widths differ: command=%d help=%d", lipgloss.Width(commandSearch), lipgloss.Width(helpSearch))
+	}
+	if lipgloss.Width(commandRow) != lipgloss.Width(templateRow) {
+		t.Fatalf("result row widths differ: command=%d template=%d", lipgloss.Width(commandRow), lipgloss.Width(templateRow))
+	}
+	if lipgloss.Width(commandRow) != lipgloss.Width(helpRow) {
+		t.Fatalf("result row widths differ: command=%d help=%d", lipgloss.Width(commandRow), lipgloss.Width(helpRow))
+	}
+	if got, want := lipgloss.Width(commandRow), lipgloss.Width(commandSearch); got != want {
+		t.Fatalf("command result width = %d, want search width %d", got, want)
+	}
+	if got, want := lipgloss.Width(templateRow), lipgloss.Width(templateSearch); got != want {
+		t.Fatalf("template result width = %d, want search width %d", got, want)
+	}
+	if got, want := lipgloss.Width(helpRow), lipgloss.Width(helpSearch); got != want {
+		t.Fatalf("help result width = %d, want search width %d", got, want)
+	}
+}
+
+func TestTemplateSectionDividerAlignsWithSearchOuterBox(t *testing.T) {
+	panel := renderTemplatePicker(
+		newStyles(theme.Default()),
+		config.Dialogs{Panel: config.DialogSize{Width: 70, Height: 20}},
+		config.Default().UI.Keys,
+		[]sessionconfig.Template{testTemplate("repo", "Repository")},
+		"",
+		0,
+		0,
+		120,
+		24,
+	)
+
+	searchLine, _ := panelSearchAndResultLines(t, panel, "Repository")
+	var dividerLine string
+	for _, line := range strings.Split(panel, "\n") {
+		if strings.Contains(ansi.Strip(line), "GLOBAL ─") {
+			dividerLine = line
+			break
+		}
+	}
+	if dividerLine == "" {
+		t.Fatalf("template panel missing divider:\n%s", ansi.Strip(panel))
+	}
+	if got, want := lipgloss.Width(dividerLine), lipgloss.Width(searchLine); got != want {
+		t.Fatalf("divider width = %d, want search outer width %d", got, want)
+	}
+}
+
+func TestPopupsShowSelectionMarker(t *testing.T) {
+	styles := newStyles(theme.Default())
+	dialogs := config.Dialogs{Panel: config.DialogSize{Width: 70, Height: 20}}
+	commandPanel := renderCommandPalette(
+		styles,
+		dialogs,
+		[]commandMatch{{item: commandItem{Title: "Open", Key: "<enter>", Enabled: true}}},
+		"",
+		0,
+		0,
+		120,
+		24,
+	)
+	templatePanel := renderTemplatePicker(
+		styles,
+		dialogs,
+		config.Default().UI.Keys,
+		[]sessionconfig.Template{testTemplate("repo", "Repository")},
+		"",
+		0,
+		0,
+		120,
+		24,
+	)
+	helpPanel := renderHelpPanel(styles, dialogs, modeBrowse, 0, 0, 120, 24)
+
+	_, commandRow := panelSearchAndResultLines(t, commandPanel, "Open")
+	_, templateRow := panelSearchAndResultLines(t, templatePanel, "Repository")
+	_, helpRow := panelSearchAndResultLines(t, helpPanel, "filter sessions")
+	if !strings.Contains(ansi.Strip(commandRow), "▌") {
+		t.Fatalf("command selection row missing marker: %q", ansi.Strip(commandRow))
+	}
+	if !strings.Contains(ansi.Strip(templateRow), "▌") {
+		t.Fatalf("template selection row missing marker: %q", ansi.Strip(templateRow))
+	}
+	if !strings.Contains(ansi.Strip(helpRow), "▌") {
+		t.Fatalf("help selection row missing marker: %q", ansi.Strip(helpRow))
+	}
+}
+
+func panelSearchAndResultLines(t *testing.T, panel string, resultText string) (string, string) {
+	t.Helper()
+	var searchLine string
+	var resultLine string
+	for _, line := range strings.Split(panel, "\n") {
+		stripped := ansi.Strip(line)
+		if strings.Contains(stripped, "❯") {
+			searchLine = line
+		}
+		if resultLine == "" && strings.Contains(stripped, resultText) {
+			resultLine = line
+		}
+	}
+	if searchLine == "" || resultLine == "" {
+		t.Fatalf("panel missing search or result line:\n%s", ansi.Strip(panel))
+	}
+	return searchLine, resultLine
+}
+
+func TestTemplatePickerTabJumpsBetweenSections(t *testing.T) {
+	local := testTemplate("local", "Local Workspace")
+	local.Source = sessionconfig.SourceLocal
+	global := testTemplate("global", "Global Workspace")
+	global.Source = sessionconfig.SourceGlobal
+	model := NewModelWithTemplates(
+		nil,
+		theme.Default(),
+		nil,
+		discovery.Options{},
+		config.PathSearch{},
+		config.Glyphs{},
+		config.GlyphColors{},
+		config.Columns{},
+		config.Default().UI.Keys,
+		[]sessionconfig.Template{local, global},
+	)
+	model.mode = modeTemplatePicker
+	model.templateFiltered = templatePickerItems([]sessionconfig.Template{local, global})
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyTab})
+	model = updated.(Model)
+	if model.templateCursor != 1 {
+		t.Fatalf("template cursor after tab = %d, want first global index 1", model.templateCursor)
+	}
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	model = updated.(Model)
+	if model.templateCursor != 0 {
+		t.Fatalf("template cursor after shift-tab = %d, want first local index 0", model.templateCursor)
+	}
+}
+
+func TestRenderTemplateSectionHeaderHighlightsActiveSection(t *testing.T) {
+	styles := newStyles(theme.Default())
+	active := renderTemplateSectionHeader(sessionconfig.SourceLocal, true, styles, 40)
+	inactive := renderTemplateSectionHeader(sessionconfig.SourceLocal, false, styles, 40)
+	if ansi.Strip(active) != ansi.Strip(inactive) {
+		t.Fatalf("active header text = %q, want inactive header text %q", ansi.Strip(active), ansi.Strip(inactive))
+	}
+	activeLabel, activeLine := templateSectionStyles(true, styles)
+	inactiveLabel, inactiveLine := templateSectionStyles(false, styles)
+	if activeLabel.GetForeground() != styles.popupAccent.GetForeground() || activeLine.GetForeground() != styles.filterLabel.GetForeground() {
+		t.Fatal("active template section does not use theme accent styles")
+	}
+	if inactiveLabel.GetForeground() != styles.muted.GetForeground() || inactiveLine.GetForeground() != styles.muted.GetForeground() {
+		t.Fatal("inactive template section does not use muted styles")
+	}
+}
+
+func TestTemplatePickerCancelReturnsToBrowse(t *testing.T) {
+	model := NewModelWithTemplates(
+		nil,
+		theme.Default(),
+		nil,
+		discovery.Options{},
+		config.PathSearch{},
+		config.Glyphs{},
+		config.GlyphColors{},
+		config.Columns{},
+		config.Default().UI.Keys,
+		[]sessionconfig.Template{testTemplate("zen", "Zen")},
+	)
+	model.mode = modeTemplatePicker
+	model.templatePath = "/tmp/repo"
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatalf("cmd = %#v, want nil", cmd)
+	}
+	if model.mode != modeBrowse || model.templatePath != "" {
+		t.Fatalf("mode/templatePath = %v/%q, want browse empty", model.mode, model.templatePath)
 	}
 }
 

@@ -70,6 +70,19 @@ func TestFilterCarriesFieldIndexesWhenAliasWinsScore(t *testing.T) {
 	}
 }
 
+func TestFilterHighlightsMatchingAliasWhenTitleWinsScore(t *testing.T) {
+	candidates := []Candidate{
+		{Title: "Repository", Aliases: []string{"rp"}},
+	}
+	matches := Filter(candidates, "rp")
+	if len(matches) != 1 {
+		t.Fatalf("match count = %d, want 1", len(matches))
+	}
+	if got := matches[0].AliasIndexes["rp"]; !equalIndexes(got, []int{0, 1}) {
+		t.Fatalf("alias indexes = %#v, want [0 1]", got)
+	}
+}
+
 func TestFilterRanksTitleMatchAboveCategoryMatch(t *testing.T) {
 	candidates := []Candidate{
 		{Title: "Tools", Category: "Misc"},

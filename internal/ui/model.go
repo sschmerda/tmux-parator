@@ -19,6 +19,7 @@ import (
 	"github.com/sschmerda/tmux-parator/internal/discovery"
 	"github.com/sschmerda/tmux-parator/internal/fuzzy"
 	"github.com/sschmerda/tmux-parator/internal/pathsearch"
+	"github.com/sschmerda/tmux-parator/internal/sessionconfig"
 	"github.com/sschmerda/tmux-parator/internal/theme"
 	"github.com/sschmerda/tmux-parator/internal/tmux"
 )
@@ -30,6 +31,7 @@ type sessionClient interface {
 	KillSession(context.Context, string) error
 	RenameSession(context.Context, string, string) error
 	NewSession(context.Context, string, string, tmux.SessionMetadata) error
+	NewSessionWithLayout(context.Context, string, string, tmux.SessionMetadata, sessionconfig.Template) error
 	TagSession(context.Context, string, tmux.SessionMetadata) error
 }
 
@@ -44,6 +46,7 @@ const (
 	modeRenameSession
 	modePathSearch
 	modeConfirmCreatePath
+	modeTemplatePicker
 )
 
 type confirmChoice int
@@ -63,6 +66,8 @@ type Model struct {
 	columns              config.Columns
 	dialogs              config.Dialogs
 	keys                 config.KeyBindings
+	templates            []sessionconfig.Template
+	matchingTemplates    []sessionconfig.Template
 	sessions             []tmux.Session
 	rootItems            []discovery.Candidate
 	candidates           []candidate
@@ -78,6 +83,16 @@ type Model struct {
 	createText           string
 	createPath           string
 	createMetadata       tmux.SessionMetadata
+	templatePath         string
+	templateMetadata     tmux.SessionMetadata
+	templateName         string
+	templateAvailable    []sessionconfig.Template
+	templateFilter       string
+	templateFiltered     []sessionconfig.Template
+	pendingTemplateName  string
+	pendingTemplatePath  string
+	pendingTemplateMeta  tmux.SessionMetadata
+	pendingTemplate      sessionconfig.Template
 	renameText           string
 	renameOriginal       string
 	cursor               int
@@ -89,8 +104,11 @@ type Model struct {
 	pathScroll           int
 	helpCursor           int
 	helpScroll           int
+	helpInput            string
 	commandCursor        int
 	commandScroll        int
+	templateCursor       int
+	templateScroll       int
 	confirmChoice        confirmChoice
 	pathCompletionCursor int
 	pathCompletionInput  string
@@ -108,9 +126,24 @@ type Model struct {
 	mode                 mode
 	previousMode         mode
 	commandPreviousMode  mode
+	templatePreviousMode mode
 	loading              bool
 	pathBusy             bool
 	styles               styles
+}
+
+const noTemplatePickerName = "No template"
+
+func noTemplatePickerItem() sessionconfig.Template {
+	return sessionconfig.Template{
+		Name:        noTemplatePickerName,
+		Description: "Create a normal tmux session without applying a template.",
+		Chip:        "nt",
+	}
+}
+
+func isNoTemplatePickerItem(template sessionconfig.Template) bool {
+	return template.ID == "" && template.Name == noTemplatePickerName
 }
 
 type pathsearchConfig struct {
@@ -194,6 +227,10 @@ func NewModel(client sessionClient, activeTheme theme.Theme, roots []config.Root
 }
 
 func NewModelWithKeys(client sessionClient, activeTheme theme.Theme, roots []config.Root, discoveryOptions discovery.Options, pathSearch config.PathSearch, glyphs config.Glyphs, glyphColors config.GlyphColors, columns config.Columns, keys config.KeyBindings, dialogs ...config.Dialogs) Model {
+	return NewModelWithTemplates(client, activeTheme, roots, discoveryOptions, pathSearch, glyphs, glyphColors, columns, keys, nil, dialogs...)
+}
+
+func NewModelWithTemplates(client sessionClient, activeTheme theme.Theme, roots []config.Root, discoveryOptions discovery.Options, pathSearch config.PathSearch, glyphs config.Glyphs, glyphColors config.GlyphColors, columns config.Columns, keys config.KeyBindings, templates []sessionconfig.Template, dialogs ...config.Dialogs) Model {
 	glyphs = normalizeUIGlyphs(glyphs)
 	glyphColors = normalizeUIGlyphColors(glyphColors)
 	columns = normalizeUIColumns(columns)
@@ -206,14 +243,16 @@ func NewModelWithKeys(client sessionClient, activeTheme theme.Theme, roots []con
 	}
 	dialogConfig = normalizeUIDialogs(dialogConfig)
 	return Model{
-		client:      client,
-		roots:       roots,
-		discovery:   discoveryOptions,
-		glyphs:      glyphs,
-		glyphColors: glyphColors,
-		columns:     columns,
-		dialogs:     dialogConfig,
-		keys:        keys,
+		client:            client,
+		roots:             roots,
+		discovery:         discoveryOptions,
+		glyphs:            glyphs,
+		glyphColors:       glyphColors,
+		columns:           columns,
+		dialogs:           dialogConfig,
+		keys:              keys,
+		templates:         sessionconfig.EnabledTemplates(templates),
+		matchingTemplates: sessionconfig.EnabledTemplatesInOrder(templates),
 		pathConfig: pathsearchConfig{
 			enabled: pathSearch.Enabled,
 			roots:   pathSearch.Roots,
@@ -431,6 +470,16 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.notice != nil {
 		if keyMatches(msg, m.keys.Browse.OpenSelected) || keyMatches(msg, dismissKeys(m.keys.Browse.Quit)) {
 			m.notice = nil
+			if keyMatches(msg, m.keys.Browse.OpenSelected) && strings.TrimSpace(m.pendingTemplatePath) != "" {
+				name := m.pendingTemplateName
+				path := m.pendingTemplatePath
+				metadata := m.pendingTemplateMeta
+				template := m.pendingTemplate
+				m.clearPendingTemplate()
+				m.loading = true
+				return m, m.createSessionWithTemplate(name, path, metadata, template)
+			}
+			m.clearPendingTemplate()
 		}
 		return m, nil
 	}
@@ -444,27 +493,42 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateCommandKey(msg)
 	}
 	if m.mode == modeHelp {
+		items := m.helpMatches()
 		switch {
 		case keyMatches(msg, m.keys.Help.Close):
 			m.mode = m.previousMode
-		case keyMatches(msg, m.keys.Help.Up):
+		case keyMatches(msg, m.keys.Browse.Up):
 			if m.helpCursor > 0 {
 				m.helpCursor--
 				m.ensureHelpCursorVisible()
 			}
-		case keyMatches(msg, m.keys.Help.Down):
-			if m.helpCursor < len(m.helpItemsForMode(m.previousMode))-1 {
+		case keyMatches(msg, m.keys.Browse.Down):
+			if m.helpCursor < len(items)-1 {
 				m.helpCursor++
 				m.ensureHelpCursorVisible()
 			}
-		case keyMatches(msg, m.keys.Help.PageUp):
-			m.moveHelpCursor(-halfPageStep(helpListHeightForFrame(panelDialogFrame(m.dialogs, m.innerWidth(), m.innerHeight()))))
-		case keyMatches(msg, m.keys.Help.PageDown):
-			m.moveHelpCursor(halfPageStep(helpListHeightForFrame(panelDialogFrame(m.dialogs, m.innerWidth(), m.innerHeight()))))
-		case keyMatches(msg, m.keys.Help.ScrollUp):
+		case keyMatches(msg, m.keys.Browse.PageUp):
+			m.moveHelpCursor(-halfPageStep(commandListHeightForFrame(panelDialogFrame(m.dialogs, m.innerWidth(), m.innerHeight()))))
+		case keyMatches(msg, m.keys.Browse.PageDown):
+			m.moveHelpCursor(halfPageStep(commandListHeightForFrame(panelDialogFrame(m.dialogs, m.innerWidth(), m.innerHeight()))))
+		case keyMatches(msg, m.keys.Browse.ScrollUp):
 			m.scrollHelpViewport(-1)
-		case keyMatches(msg, m.keys.Help.ScrollDown):
+		case keyMatches(msg, m.keys.Browse.ScrollDown):
 			m.scrollHelpViewport(1)
+		case keyMatches(msg, m.keys.Browse.DeleteChar):
+			m.helpInput = deleteLastRune(m.helpInput)
+			m.clampHelpCursor()
+		case keyMatches(msg, m.keys.Browse.DeleteWord):
+			m.helpInput = deleteLastShellWord(m.helpInput)
+			m.clampHelpCursor()
+		case keyMatches(msg, m.keys.Browse.ClearInput):
+			m.helpInput = ""
+			m.clampHelpCursor()
+		default:
+			if len(msg.Runes) > 0 && !msg.Alt {
+				m.helpInput += string(msg.Runes)
+				m.clampHelpCursor()
+			}
 		}
 		return m, nil
 	}
@@ -498,6 +562,9 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.mode == modePathSearch {
 		return m.updatePathSearchKey(msg)
+	}
+	if m.mode == modeTemplatePicker {
+		return m.updateTemplateKey(msg)
 	}
 	if m.mode == modeConfirmKill {
 		switch {
@@ -536,6 +603,8 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.openRenameSession()
 	case keyMatches(msg, m.keys.Browse.NewSession):
 		m.openCreateSession()
+	case keyMatches(msg, m.keys.Browse.TemplateSession):
+		return m.openTemplatePicker()
 	case keyMatches(msg, m.keys.Browse.PathSearch):
 		return m.openPathSearch()
 	case keyMatches(msg, m.keys.Browse.ToggleHidden):
@@ -573,7 +642,7 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !ok {
 			return m, nil
 		}
-		return m, m.openCandidate(selected)
+		return m.openCandidate(selected)
 	case keyMatches(msg, m.keys.Browse.KillSession):
 		if selected, ok := m.selected(); ok && selected.kind == candidateSession {
 			m.mode = modeConfirmKill
@@ -728,6 +797,229 @@ func (m Model) updateRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) updateTemplateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	items := m.templateFiltered
+	switch {
+	case keyMatches(msg, m.keys.Browse.Quit):
+		m.closeTemplatePicker()
+	case keyMatches(msg, m.keys.Browse.OpenSelected):
+		if len(items) == 0 || m.templateCursor < 0 || m.templateCursor >= len(items) {
+			return m, nil
+		}
+		template := items[m.templateCursor]
+		name := m.availableSessionName(m.templateName)
+		metadata := m.templateMetadata
+		metadata.BaseName = m.templateName
+		path := m.templatePath
+		previous := m.templatePreviousMode
+		m.loading = true
+		m.closeTemplatePicker()
+		if previous == modePathSearch {
+			m.stopPathStream()
+			m.mode = modeBrowse
+		}
+		if isNoTemplatePickerItem(template) {
+			return m, m.createSessionWithMetadata(name, path, metadata)
+		}
+		return m, m.createSessionWithTemplate(name, path, metadata, template)
+	case keyMatches(msg, m.keys.Browse.Up):
+		if m.templateCursor > 0 {
+			m.templateCursor--
+			m.ensureTemplateCursorVisible()
+		}
+	case keyMatches(msg, m.keys.Browse.Down):
+		if m.templateCursor < len(items)-1 {
+			m.templateCursor++
+			m.ensureTemplateCursorVisible()
+		}
+	case keyMatches(msg, m.keys.Browse.PageUp):
+		m.moveTemplateCursor(-halfPageStep(templateListHeightForFrame(panelDialogFrame(m.dialogs, m.innerWidth(), m.innerHeight()))))
+	case keyMatches(msg, m.keys.Browse.PageDown):
+		m.moveTemplateCursor(halfPageStep(templateListHeightForFrame(panelDialogFrame(m.dialogs, m.innerWidth(), m.innerHeight()))))
+	case keyMatches(msg, m.keys.Browse.ScrollUp):
+		m.scrollTemplateViewport(-1)
+	case keyMatches(msg, m.keys.Browse.ScrollDown):
+		m.scrollTemplateViewport(1)
+	case keyMatches(msg, m.keys.Browse.JumpNextSection):
+		m.jumpTemplateSection(1)
+	case keyMatches(msg, m.keys.Browse.JumpPreviousSection):
+		m.jumpTemplateSection(-1)
+	case keyMatches(msg, m.keys.Browse.DeleteChar):
+		m.templateFilter = deleteLastRune(m.templateFilter)
+		m.applyTemplateFilter()
+	case keyMatches(msg, m.keys.Browse.DeleteWord):
+		m.templateFilter = deleteLastShellWord(m.templateFilter)
+		m.applyTemplateFilter()
+	case keyMatches(msg, m.keys.Browse.ClearInput):
+		m.templateFilter = ""
+		m.applyTemplateFilter()
+	default:
+		if len(msg.Runes) > 0 && !msg.Alt {
+			m.templateFilter += string(msg.Runes)
+			m.applyTemplateFilter()
+		}
+	}
+	return m, nil
+}
+
+func (m *Model) closeTemplatePicker() {
+	if m.templatePreviousMode == modePathSearch {
+		m.mode = modePathSearch
+	} else {
+		m.mode = modeBrowse
+	}
+	m.templatePath = ""
+	m.templateName = ""
+	m.templateMetadata = tmux.SessionMetadata{}
+	m.templateAvailable = nil
+	m.templateFilter = ""
+	m.templateFiltered = nil
+	m.templateCursor = 0
+	m.templateScroll = 0
+	m.templatePreviousMode = modeBrowse
+}
+
+func (m Model) openTemplatePicker() (tea.Model, tea.Cmd) {
+	selected, ok := m.selected()
+	if !ok {
+		m.notice = fmt.Errorf("there is no selected candidate")
+		return m, nil
+	}
+	return m.openTemplatePickerForCandidate(selected, modeBrowse)
+}
+
+func (m Model) openPathTemplatePicker() (tea.Model, tea.Cmd) {
+	selected, ok := m.selectedPath()
+	if !ok {
+		m.pathNotice = fmt.Errorf("there is no selected path result")
+		return m, nil
+	}
+	return m.openTemplatePickerForCandidate(selected, modePathSearch)
+}
+
+func (m Model) openTemplatePickerForCandidate(selected candidate, previous mode) (tea.Model, tea.Cmd) {
+	if selected.kind == candidateSession {
+		m.notice = fmt.Errorf("selected item is already an open tmux session")
+		return m, nil
+	}
+	path, metadata, ok := m.namedSessionTarget(selected)
+	if !ok {
+		m.notice = fmt.Errorf("selected item has no path")
+		return m, nil
+	}
+	if session, ok := m.sessionForPath(path); ok {
+		m.notice = fmt.Errorf("tmux session already exists for %s: %s", path, session.Name)
+		return m, nil
+	}
+	m.mode = modeTemplatePicker
+	m.templatePreviousMode = previous
+	m.templatePath = path
+	m.templateName = selected.sessionName()
+	m.templateMetadata = metadata
+	m.templateFilter = ""
+	templates, err := m.templatesForPath(path)
+	if err != nil {
+		m.notice = err
+		return m, nil
+	}
+	m.templateAvailable = templates
+	m.templateFiltered = templatePickerItems(m.templateAvailable)
+	m.templateCursor = 0
+	m.templateScroll = 0
+	m.applyTemplateFilter()
+	return m, nil
+}
+
+func (m *Model) ensureTemplateCursorVisible() {
+	limit := templateListHeightForFrame(panelDialogFrame(m.dialogs, m.innerWidth(), m.innerHeight()))
+	templates := m.templateFiltered
+	cursorRow := templateDisplayRow(templates, m.templateCursor)
+	scrollRow := templateScrollDisplayRow(templates, m.templateScroll)
+	if cursorRow < scrollRow {
+		m.templateScroll = m.templateCursor
+		return
+	}
+	for cursorRow-scrollRow+1 > limit && m.templateScroll < m.templateCursor && m.templateScroll < len(templates) {
+		m.templateScroll++
+		scrollRow = templateScrollDisplayRow(templates, m.templateScroll)
+	}
+}
+
+func (m *Model) jumpTemplateSection(direction int) {
+	starts := templateSectionStartIndexes(m.templateFiltered)
+	if len(starts) == 0 {
+		return
+	}
+	if direction >= 0 {
+		for _, start := range starts {
+			if start > m.templateCursor {
+				m.templateCursor = start
+				m.ensureTemplateCursorVisible()
+				return
+			}
+		}
+		m.templateCursor = starts[0]
+		m.ensureTemplateCursorVisible()
+		return
+	}
+	for i := len(starts) - 1; i >= 0; i-- {
+		if starts[i] < m.templateCursor {
+			m.templateCursor = starts[i]
+			m.ensureTemplateCursorVisible()
+			return
+		}
+	}
+	m.templateCursor = starts[len(starts)-1]
+	m.ensureTemplateCursorVisible()
+}
+
+func templateSectionStartIndexes(templates []sessionconfig.Template) []int {
+	starts := make([]int, 0, 2)
+	for i := range templates {
+		if templateStartsSection(templates, i) {
+			starts = append(starts, i)
+		}
+	}
+	return starts
+}
+
+func (m *Model) moveTemplateCursor(delta int) {
+	if len(m.templateFiltered) == 0 {
+		m.templateCursor = 0
+		m.templateScroll = 0
+		return
+	}
+	m.templateCursor += delta
+	if m.templateCursor < 0 {
+		m.templateCursor = 0
+	}
+	if m.templateCursor >= len(m.templateFiltered) {
+		m.templateCursor = len(m.templateFiltered) - 1
+	}
+	m.ensureTemplateCursorVisible()
+}
+
+func (m *Model) scrollTemplateViewport(delta int) {
+	if len(m.templateFiltered) == 0 {
+		return
+	}
+	m.templateScroll += delta
+	if m.templateScroll < 0 {
+		m.templateScroll = 0
+	}
+	maxScroll := len(m.templateFiltered) - 1
+	if m.templateScroll > maxScroll {
+		m.templateScroll = maxScroll
+	}
+	if m.templateCursor < m.templateScroll {
+		m.templateCursor = m.templateScroll
+	}
+	limit := templateListHeightForFrame(panelDialogFrame(m.dialogs, m.innerWidth(), m.innerHeight()))
+	if m.templateCursor >= m.templateScroll+limit {
+		m.templateCursor = m.templateScroll + limit - 1
+	}
+}
+
 func (m Model) updatePathSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case keyMatches(msg, m.keys.PathSearch.Close):
@@ -741,6 +1033,8 @@ func (m Model) updatePathSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.stopPathStream()
 		m.mode = modeBrowse
 		return m, m.switchLastSession()
+	case keyMatches(msg, m.keys.PathSearch.TemplateSession):
+		return m.openPathTemplatePicker()
 	case keyMatches(msg, m.keys.PathSearch.Help):
 		m.openHelp(modePathSearch)
 		return m, nil
@@ -771,7 +1065,7 @@ func (m Model) updatePathSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.loading = true
 		m.stopPathStream()
 		m.mode = modeBrowse
-		return m, m.openCandidate(selected)
+		return m.openCandidate(selected)
 	case keyMatches(msg, m.keys.PathSearch.CreateTyped):
 		return m.openCreateTypedPathConfirmation()
 	case keyMatches(msg, m.keys.PathSearch.CompleteNext):
@@ -816,7 +1110,7 @@ func (m Model) updatePathSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.loading = true
 		m.stopPathStream()
 		m.mode = modeBrowse
-		return m, m.openCandidate(selected)
+		return m.openCandidate(selected)
 	case keyMatches(msg, m.keys.PathSearch.DeleteChar):
 		return m.updatePathInput(deleteLastRune(m.pathInput))
 	case keyMatches(msg, m.keys.PathSearch.DeleteWord):
@@ -1000,11 +1294,14 @@ func (m Model) renderWithOverlay(content string) string {
 	if m.mode == modeRenameSession {
 		base = placeCenteredOverlay(base, renderRenameSessionWithKeys(m.styles, m.dialogs, m.keys, m.renameText, innerWidth, innerHeight), innerWidth, innerHeight)
 	}
+	if m.mode == modeTemplatePicker {
+		base = placeOverlay(base, renderTemplatePicker(m.styles, m.dialogs, m.keys, m.templateFiltered, m.templateFilter, m.templateCursor, m.templateScroll, innerWidth, innerHeight), innerWidth, innerHeight)
+	}
 	if m.mode == modeCommands || (m.mode == modeHelp && m.previousMode == modeCommands) {
 		base = placeOverlay(base, renderCommandPalette(m.styles, m.dialogs, m.commandMatches(), m.commandInput, m.commandCursor, m.commandScroll, innerWidth, innerHeight), innerWidth, innerHeight)
 	}
 	if m.mode == modeHelp {
-		base = placeOverlay(base, renderHelpPanelWithKeys(m.styles, m.dialogs, m.keys, m.previousMode, m.helpCursor, m.helpScroll, innerWidth, innerHeight), innerWidth, innerHeight)
+		base = placeOverlay(base, renderHelpPanelWithKeys(m.styles, m.dialogs, m.keys, m.previousMode, m.helpInput, m.helpCursor, m.helpScroll, innerWidth, innerHeight), innerWidth, innerHeight)
 	}
 	if m.notice != nil {
 		base = placeCenteredOverlay(base, renderPathNoticePopupWithKeys(m.styles, m.dialogs, m.keys.Browse.OpenSelected, dismissKeys(m.keys.Browse.Quit), m.notice.Error(), innerWidth, innerHeight), innerWidth, innerHeight)
@@ -1823,7 +2120,7 @@ func (m Model) confirmCreateTypedPath() (tea.Model, tea.Cmd) {
 	m.confirmChoice = confirmCancel
 	m.stopPathStream()
 	m.mode = modeBrowse
-	return m, m.openCandidate(candidate)
+	return m.openCandidate(candidate)
 }
 
 func typedMissingPathCandidate(pathInput string) (candidate, bool, error) {
@@ -2022,7 +2319,7 @@ func (m *Model) moveCommandCursor(delta int) {
 }
 
 func (m *Model) moveHelpCursor(delta int) {
-	items := m.helpItemsForMode(m.previousMode)
+	items := m.helpMatches()
 	if len(items) == 0 {
 		m.helpCursor = 0
 		m.helpScroll = 0
@@ -2080,8 +2377,8 @@ func (m *Model) scrollCommandViewport(direction int) {
 }
 
 func (m *Model) scrollHelpViewport(direction int) {
-	items := m.helpItemsForMode(m.previousMode)
-	visible := helpListHeightForFrame(panelDialogFrame(m.dialogs, m.innerWidth(), m.innerHeight()))
+	items := m.helpMatches()
+	visible := commandListHeightForFrame(panelDialogFrame(m.dialogs, m.innerWidth(), m.innerHeight()))
 	total := len(items)
 	if total == 0 {
 		m.helpCursor = 0
@@ -2205,10 +2502,11 @@ func (m *Model) openHelp(previous mode) {
 	m.mode = modeHelp
 	m.helpCursor = 0
 	m.helpScroll = 0
+	m.helpInput = ""
 }
 
 func (m *Model) ensureHelpCursorVisible() {
-	limit := helpListHeightForFrame(panelDialogFrame(m.dialogs, m.innerWidth(), m.innerHeight()))
+	limit := commandListHeightForFrame(panelDialogFrame(m.dialogs, m.innerWidth(), m.innerHeight()))
 	if m.helpCursor < m.helpScroll {
 		m.helpScroll = m.helpCursor
 		return
@@ -2216,6 +2514,22 @@ func (m *Model) ensureHelpCursorVisible() {
 	for m.helpCursor-m.helpScroll+1 > limit && m.helpScroll < m.helpCursor {
 		m.helpScroll++
 	}
+}
+
+func (m *Model) clampHelpCursor() {
+	items := m.helpMatches()
+	if len(items) == 0 {
+		m.helpCursor = 0
+		m.helpScroll = 0
+		return
+	}
+	if m.helpCursor >= len(items) {
+		m.helpCursor = len(items) - 1
+	}
+	if m.helpCursor < 0 {
+		m.helpCursor = 0
+	}
+	m.ensureHelpCursorVisible()
 }
 
 func (m *Model) clearPathCompletion() {
@@ -2326,6 +2640,19 @@ func (m Model) createSessionWithMetadata(name string, path string, metadata tmux
 	}
 }
 
+func (m Model) createSessionWithTemplate(name string, path string, metadata tmux.SessionMetadata, template sessionconfig.Template) tea.Cmd {
+	return func() tea.Msg {
+		return createdMsg{name: name, err: m.client.NewSessionWithLayout(context.Background(), name, path, metadata, template)}
+	}
+}
+
+func (m *Model) clearPendingTemplate() {
+	m.pendingTemplateName = ""
+	m.pendingTemplatePath = ""
+	m.pendingTemplateMeta = tmux.SessionMetadata{}
+	m.pendingTemplate = sessionconfig.Template{}
+}
+
 func (m Model) loadRoots() tea.Cmd {
 	return func() tea.Msg {
 		roots, err := discovery.Discover(context.Background(), m.roots, m.discovery)
@@ -2410,10 +2737,10 @@ func (m *Model) stopPathStream() {
 	m.pathBusy = false
 }
 
-func (m Model) openCandidate(selected candidate) tea.Cmd {
+func (m Model) openCandidate(selected candidate) (tea.Model, tea.Cmd) {
 	if selected.kind == candidateRoot || selected.kind == candidatePath {
 		if session, ok := m.sessionForPath(selected.path()); ok {
-			return m.tagAndSwitchSession(session.Name, selected.sessionMetadata())
+			return m, m.tagAndSwitchSession(session.Name, selected.sessionMetadata())
 		}
 		name := m.availableSessionName(selected.sessionName())
 		metadata := selected.sessionMetadata()
@@ -2424,9 +2751,42 @@ func (m Model) openCandidate(selected candidate) tea.Cmd {
 		if selected.kind == candidatePath && metadata.GlyphColor == "" {
 			metadata.GlyphColor = m.glyphColors.Path
 		}
-		return m.createSessionWithMetadata(name, selected.path(), metadata)
+		if template, templatePath, ok, err := m.localTemplateForPath(selected.path()); err != nil {
+			m.notice = err
+			return m, nil
+		} else if ok {
+			m.pendingTemplateName = name
+			m.pendingTemplatePath = selected.path()
+			m.pendingTemplateMeta = metadata
+			m.pendingTemplate = template
+			m.notice = fmt.Errorf("local tmux-parator template found: %s", templatePath)
+			return m, nil
+		}
+		if template, ok := sessionconfig.MatchingTemplate(m.matchingTemplates, selected.path()); ok {
+			return m, m.createSessionWithTemplate(name, selected.path(), metadata, template)
+		}
+		return m, m.createSessionWithMetadata(name, selected.path(), metadata)
 	}
-	return m.switchSession(selected.session.Name)
+	return m, m.switchSession(selected.session.Name)
+}
+
+func (m Model) templatesForPath(path string) ([]sessionconfig.Template, error) {
+	templates := make([]sessionconfig.Template, 0, len(m.templates)+1)
+	if template, _, ok, err := m.localTemplateForPath(path); err != nil {
+		return nil, err
+	} else if ok {
+		templates = append(templates, template)
+	}
+	templates = append(templates, m.templates...)
+	return templates, nil
+}
+
+func (m Model) localTemplateForPath(path string) (sessionconfig.Template, string, bool, error) {
+	template, templatePath, ok, err := sessionconfig.LoadLocal(path)
+	if err != nil {
+		return sessionconfig.Template{}, templatePath, ok, fmt.Errorf("load local tmux-parator template: %w", err)
+	}
+	return template, templatePath, ok, nil
 }
 
 func (m Model) sessionForPath(path string) (tmux.Session, bool) {
@@ -3291,23 +3651,30 @@ type helpItem struct {
 	Description string
 }
 
+type helpMatch struct {
+	item          helpItem
+	actionIndexes []int
+	keyIndexes    []int
+}
+
 type commandID string
 
 const (
-	commandOpenSelected  commandID = "open-selected"
-	commandOpenLast      commandID = "open-last-session"
-	commandOpenTyped     commandID = "open-typed"
-	commandCreateTyped   commandID = "create-typed-path"
-	commandKillSession   commandID = "kill-session"
-	commandRenameSession commandID = "rename-session"
-	commandNewSession    commandID = "new-session"
-	commandPathSearch    commandID = "path-search"
-	commandCycleRoot     commandID = "cycle-root"
-	commandReload        commandID = "reload"
-	commandToggleHidden  commandID = "toggle-hidden"
-	commandToggleIgnored commandID = "toggle-ignored"
-	commandHelp          commandID = "help"
-	commandQuit          commandID = "quit"
+	commandOpenSelected    commandID = "open-selected"
+	commandOpenLast        commandID = "open-last-session"
+	commandOpenTyped       commandID = "open-typed"
+	commandCreateTyped     commandID = "create-typed-path"
+	commandKillSession     commandID = "kill-session"
+	commandRenameSession   commandID = "rename-session"
+	commandNewSession      commandID = "new-session"
+	commandTemplateSession commandID = "template-session"
+	commandPathSearch      commandID = "path-search"
+	commandCycleRoot       commandID = "cycle-root"
+	commandReload          commandID = "reload"
+	commandToggleHidden    commandID = "toggle-hidden"
+	commandToggleIgnored   commandID = "toggle-ignored"
+	commandHelp            commandID = "help"
+	commandQuit            commandID = "quit"
 )
 
 type commandItem struct {
@@ -3347,6 +3714,16 @@ func (item commandItem) fuzzyCandidate() fuzzy.Candidate {
 func (m Model) commandItems() []commandItem {
 	if m.commandPreviousMode == modePathSearch {
 		specs := m.pathSearchCommandSpecs()
+		templateReason := ""
+		if len(m.pathResult) == 0 {
+			templateReason = "There is no selected path result."
+		} else if selected, ok := m.selectedPath(); ok {
+			if path, _, targetOK := m.namedSessionTarget(selected); !targetOK {
+				templateReason = "The selected path result has no path."
+			} else if _, exists := m.sessionForPath(path); exists {
+				templateReason = "A tmux session already exists for the selected path."
+			}
+		}
 		typedReason := ""
 		if _, ok := m.typedPathCandidate(); !ok {
 			typedReason = "The typed prompt is not an existing directory."
@@ -3357,14 +3734,15 @@ func (m Model) commandItems() []commandItem {
 		}
 		return []commandItem{
 			commandItemFromSpec(specs[0], len(m.pathResult) > 0, "There is no selected path result."),
-			commandItemFromSpec(specs[1], typedReason == "", typedReason),
-			commandItemFromSpec(specs[2], createReason == "", createReason),
-			commandItemFromSpec(specs[3], true, ""),
+			commandItemFromSpec(specs[1], templateReason == "", templateReason),
+			commandItemFromSpec(specs[2], typedReason == "", typedReason),
+			commandItemFromSpec(specs[3], createReason == "", createReason),
 			commandItemFromSpec(specs[4], true, ""),
 			commandItemFromSpec(specs[5], true, ""),
 			commandItemFromSpec(specs[6], true, ""),
 			commandItemFromSpec(specs[7], true, ""),
 			commandItemFromSpec(specs[8], true, ""),
+			commandItemFromSpec(specs[9], true, ""),
 		}
 	}
 	specs := m.browseCommandSpecs()
@@ -3372,17 +3750,24 @@ func (m Model) commandItems() []commandItem {
 	killReason := ""
 	sessionReason := ""
 	createNamedReason := ""
+	templateReason := ""
 	if !ok {
 		killReason = "There is no selected candidate."
 		sessionReason = "There is no selected candidate."
 		createNamedReason = "There is no selected candidate."
+		templateReason = "There is no selected candidate."
 	} else if selected.kind != candidateSession {
 		killReason = "The selected candidate is not an open tmux session."
 		sessionReason = "The selected candidate is not an open tmux session."
+	} else {
+		templateReason = "The selected candidate is already an open tmux session."
 	}
 	if ok {
-		if _, _, targetOK := m.namedSessionTarget(selected); !targetOK {
+		if path, _, targetOK := m.namedSessionTarget(selected); !targetOK {
 			createNamedReason = "The selected candidate has no path."
+			templateReason = "The selected candidate has no path."
+		} else if _, exists := m.sessionForPath(path); exists {
+			templateReason = "A tmux session already exists for the selected path."
 		}
 	}
 	return []commandItem{
@@ -3391,12 +3776,13 @@ func (m Model) commandItems() []commandItem {
 		commandItemFromSpec(specs[2], killReason == "", killReason),
 		commandItemFromSpec(specs[3], sessionReason == "", sessionReason),
 		commandItemFromSpec(specs[4], createNamedReason == "", createNamedReason),
-		commandItemFromSpec(specs[5], m.pathConfig.enabled, "Path search is disabled in config."),
-		commandItemFromSpec(specs[6], true, ""),
+		commandItemFromSpec(specs[5], templateReason == "", templateReason),
+		commandItemFromSpec(specs[6], m.pathConfig.enabled, "Path search is disabled in config."),
 		commandItemFromSpec(specs[7], true, ""),
 		commandItemFromSpec(specs[8], true, ""),
 		commandItemFromSpec(specs[9], true, ""),
 		commandItemFromSpec(specs[10], true, ""),
+		commandItemFromSpec(specs[11], true, ""),
 	}
 }
 
@@ -3430,6 +3816,7 @@ func (m Model) pathSearchCommandSpecs() []commandSpec {
 func pathSearchCommandSpecsFor(keys config.KeyBindings) []commandSpec {
 	return []commandSpec{
 		{ID: commandOpenSelected, Title: "Open selected result", Key: keyListLabel(keys.PathSearch.OpenSelected), Description: "Create or switch to a tmux session for the selected fuzzy path result."},
+		{ID: commandTemplateSession, Title: "Create selected result from template", Key: keyListLabel(keys.PathSearch.TemplateSession), Description: "Choose a configured session template for the selected fuzzy path result."},
 		{ID: commandOpenTyped, Title: "Open typed path", Key: keyListLabel(keys.PathSearch.OpenTyped), Description: "Open the exact typed prompt path when it exists as a directory."},
 		{ID: commandCreateTyped, Title: "Add typed path", Key: keyListLabel(keys.PathSearch.CreateTyped), Description: "Create the exact typed prompt path after confirmation, then create or switch to its tmux session."},
 		{ID: commandCycleRoot, Title: "Cycle prompt root", Key: keyListLabel(keys.PathSearch.CycleRoot), Description: "Cycle the path prompt through ~/ / ./ ../."},
@@ -3456,6 +3843,7 @@ func browseCommandSpecsFor(keys config.KeyBindings) []commandSpec {
 		{ID: commandKillSession, Title: "Kill selected session", Key: keyListLabel(keys.Browse.KillSession), Description: "Ask for confirmation before killing the selected tmux session."},
 		{ID: commandRenameSession, Title: "Rename selected session", Key: keyListLabel(keys.Browse.RenameSession), Description: "Rename the selected open tmux session."},
 		{ID: commandNewSession, Title: "Create named session", Key: keyListLabel(keys.Browse.NewSession), Description: "Create a new named tmux session from the selected row's path and kind."},
+		{ID: commandTemplateSession, Title: "Create session from template", Key: keyListLabel(keys.Browse.TemplateSession), Description: "Choose a configured session template for the selected workspace."},
 		{ID: commandPathSearch, Title: "Create session from path", Key: keyListLabel(keys.Browse.PathSearch), Description: "Open filesystem path search, then create or switch to a session for the selected path."},
 		{ID: commandToggleHidden, Title: "Toggle hidden configured paths", Key: keyListLabel(keys.Browse.ToggleHidden), Description: "Toggle whether hidden directories are skipped for configured repos and subdirs."},
 		{ID: commandToggleIgnored, Title: "Toggle gitignored configured paths", Key: keyListLabel(keys.Browse.ToggleIgnored), Description: "Toggle whether gitignored directories are skipped for configured repos and subdirs."},
@@ -3544,6 +3932,93 @@ func (m Model) commandMatches() []commandMatch {
 	return matches
 }
 
+func (m Model) helpMatches() []helpMatch {
+	items := m.helpItemsForMode(m.previousMode)
+	if len(items) == 0 {
+		items = m.helpItemsForMode(modeBrowse)
+	}
+	return filterHelpItems(items, m.helpInput)
+}
+
+func filterHelpItems(items []helpItem, query string) []helpMatch {
+	if strings.TrimSpace(query) == "" {
+		matches := make([]helpMatch, 0, len(items))
+		for _, item := range items {
+			matches = append(matches, helpMatch{item: item})
+		}
+		return matches
+	}
+	candidates := make([]fuzzy.Candidate, 0, len(items))
+	for _, item := range items {
+		candidates = append(candidates, fuzzy.Candidate{
+			Title:   item.Action,
+			Aliases: []string{item.Key},
+			Fields: []fuzzy.Field{
+				{Name: "description", Value: item.Description, Weight: 500},
+			},
+			Value: item,
+		})
+	}
+	filtered := fuzzy.Filter(candidates, query)
+	matches := make([]helpMatch, 0, len(filtered))
+	for _, match := range filtered {
+		item, ok := match.Candidate.Value.(helpItem)
+		if !ok {
+			continue
+		}
+		matches = append(matches, helpMatch{
+			item:          item,
+			actionIndexes: match.TitleIndexes,
+			keyIndexes:    match.AliasIndexes[item.Key],
+		})
+	}
+	return matches
+}
+
+func (m *Model) applyTemplateFilter() {
+	items := templatePickerItems(m.templateAvailable)
+	if strings.TrimSpace(m.templateFilter) == "" {
+		m.templateFiltered = append(m.templateFiltered[:0], items...)
+	} else {
+		fuzzyCandidates := make([]fuzzy.Candidate, 0, len(items))
+		for _, template := range items {
+			fuzzyCandidates = append(fuzzyCandidates, templateFuzzyCandidate(template))
+		}
+		matches := fuzzy.Filter(fuzzyCandidates, m.templateFilter)
+		filtered := make([]sessionconfig.Template, 0, len(matches))
+		for _, match := range matches {
+			template, ok := match.Candidate.Value.(sessionconfig.Template)
+			if !ok {
+				continue
+			}
+			filtered = append(filtered, template)
+		}
+		sort.SliceStable(filtered, func(i, j int) bool {
+			return templateSourceRank(filtered[i]) < templateSourceRank(filtered[j])
+		})
+		m.templateFiltered = filtered
+	}
+	if len(m.templateFiltered) == 0 {
+		m.templateCursor = 0
+		m.templateScroll = 0
+		return
+	}
+	if m.templateCursor >= len(m.templateFiltered) {
+		m.templateCursor = len(m.templateFiltered) - 1
+	}
+	if m.templateScroll >= len(m.templateFiltered) {
+		m.templateScroll = len(m.templateFiltered) - 1
+	}
+	m.ensureTemplateCursorVisible()
+}
+
+func templatePickerItems(templates []sessionconfig.Template) []sessionconfig.Template {
+	items := make([]sessionconfig.Template, 0, len(templates)+1)
+	items = append(items, templates...)
+	items = append(items, noTemplatePickerItem())
+	return items
+}
+
 func (m Model) runCommand(item commandItem) (tea.Model, tea.Cmd) {
 	if !item.Enabled {
 		return m.notifyCommandUnavailable(item), nil
@@ -3558,14 +4033,14 @@ func (m Model) runCommand(item commandItem) (tea.Model, tea.Cmd) {
 			m.loading = true
 			m.stopPathStream()
 			m.mode = modeBrowse
-			return m, m.openCandidate(selected)
+			return m.openCandidate(selected)
 		}
 		selected, ok := m.selected()
 		if !ok {
 			return m.notifyCommandUnavailable(item), nil
 		}
 		m.mode = modeBrowse
-		return m, m.openCandidate(selected)
+		return m.openCandidate(selected)
 	case commandOpenLast:
 		m.mode = modeBrowse
 		return m, m.switchLastSession()
@@ -3577,7 +4052,7 @@ func (m Model) runCommand(item commandItem) (tea.Model, tea.Cmd) {
 		m.loading = true
 		m.stopPathStream()
 		m.mode = modeBrowse
-		return m, m.openCandidate(selected)
+		return m.openCandidate(selected)
 	case commandCreateTyped:
 		return m.openCreateTypedPathConfirmation()
 	case commandKillSession:
@@ -3587,6 +4062,11 @@ func (m Model) runCommand(item commandItem) (tea.Model, tea.Cmd) {
 		return m.openRenameSession()
 	case commandNewSession:
 		m.openCreateSession()
+	case commandTemplateSession:
+		if m.commandPreviousMode == modePathSearch {
+			return m.openPathTemplatePicker()
+		}
+		return m.openTemplatePicker()
 	case commandPathSearch:
 		return m.openPathSearch()
 	case commandCycleRoot:
@@ -3704,14 +4184,15 @@ func renderCommandPalette(s styles, dialogs config.Dialogs, matches []commandMat
 	b.WriteString("\n\n")
 	for rowIndex := 0; rowIndex < height; rowIndex++ {
 		itemIndex := scroll + rowIndex
+		selected := itemIndex < len(matches) && itemIndex == cursor
 		row := strings.Repeat(" ", rowWidth)
 		if itemIndex < len(matches) {
-			row = renderCommandRow(matches[itemIndex], itemIndex == cursor, s, rowWidth)
+			row = renderCommandRow(matches[itemIndex], selected, s, rowWidth)
 		} else if rowIndex == 0 && len(matches) == 0 {
 			row = s.muted.Render(truncate("No matching commands", rowWidth))
 		}
 		if rowWidth != bodyWidth {
-			row += s.root.Render(" ") + renderHelpScrollbar(rowIndex, scroll, height, len(matches), s)
+			row = renderPopupSelectionMarker(selected, s) + row + renderHelpScrollbar(rowIndex, scroll, height, len(matches), s)
 		}
 		b.WriteString(row)
 		b.WriteString("\n")
@@ -3723,6 +4204,13 @@ func renderCommandPalette(s styles, dialogs config.Dialogs, matches []commandMat
 
 func renderCommandInput(query string, s styles, width int) string {
 	return renderSearchBox("❯ ", query, width, s)
+}
+
+func renderPopupSelectionMarker(selected bool, s styles) string {
+	if selected {
+		return s.glyph.Render("▌")
+	}
+	return s.root.Render(" ")
 }
 
 func renderCommandRow(match commandMatch, selected bool, s styles, width int) string {
@@ -3749,6 +4237,248 @@ func renderCommandRow(match commandMatch, selected bool, s styles, width int) st
 		return padSelectedRow(line, width, s)
 	}
 	return line
+}
+
+func renderTemplatePicker(s styles, dialogs config.Dialogs, keys config.KeyBindings, templates []sessionconfig.Template, query string, cursor int, scroll int, appWidth int, appHeight int) string {
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor >= len(templates) {
+		cursor = len(templates) - 1
+	}
+	frame := panelDialogFrame(dialogs, appWidth, appHeight)
+	width := frame.width
+	description := "Select a session template."
+	if len(templates) > 0 && cursor >= 0 {
+		description = templates[cursor].Description
+		if strings.TrimSpace(description) == "" {
+			description = templates[cursor].Name
+		}
+	}
+	descriptionLines := wrapHelpDescription(description, helpDescriptionTextWidth(width))
+	height := templateListHeightForFrame(frame)
+	if scroll < 0 {
+		scroll = 0
+	}
+	if scroll > cursor {
+		scroll = cursor
+	}
+	totalRows := templateDisplayRowCount(templates)
+	for scroll > 0 && totalRows-templateScrollDisplayRow(templates, scroll) < height {
+		scroll--
+	}
+
+	panelHeight := panelMainBoxHeight(frame)
+	contentWidth := width - 2
+	horizontalPadding := 3
+	bodyWidth := contentWidth - horizontalPadding*2
+	if bodyWidth < 20 {
+		bodyWidth = 20
+	}
+	rowWidth := bodyWidth - 2
+	if rowWidth < 20 {
+		rowWidth = bodyWidth
+	}
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(renderCommandInput(query, s, bodyWidth))
+	b.WriteString("\n\n")
+	startRow := templateScrollDisplayRow(templates, scroll)
+	activeSection := ""
+	if cursor >= 0 && cursor < len(templates) {
+		activeSection = templateSource(templates[cursor])
+	}
+	for rowIndex := 0; rowIndex < height; rowIndex++ {
+		displayRow := startRow + rowIndex
+		row := strings.Repeat(" ", rowWidth)
+		itemIndex, section := templateIndexAtDisplayRow(templates, displayRow)
+		selected := itemIndex >= 0 && itemIndex < len(templates) && itemIndex == cursor
+		fullWidthRow := false
+		if section != "" {
+			row = renderTemplateSectionHeader(section, section == activeSection, s, bodyWidth)
+			fullWidthRow = true
+		} else if itemIndex >= 0 && itemIndex < len(templates) {
+			row = renderTemplateRow(templates[itemIndex], query, selected, s, rowWidth)
+		} else if rowIndex == 0 && len(templates) == 0 {
+			row = s.muted.Render(truncate("No matching templates", rowWidth))
+		}
+		if rowWidth != bodyWidth && !fullWidthRow {
+			row = renderPopupSelectionMarker(selected, s) + row + renderHelpScrollbar(rowIndex, startRow, height, totalRows, s)
+		}
+		b.WriteString(row)
+		b.WriteString("\n")
+	}
+	mainBox := renderTitledBox("Templates", helpPositionLabel(cursor, len(templates)), b.String(), width, panelHeight, horizontalPadding, s)
+	descriptionBox := renderHelpDescription(descriptionLines, s, width)
+	footer := renderHelpDescription([]string{s.popupAccent.Render(keyListLabel(keys.Browse.OpenSelected)) + s.popupMuted.Render(" create") + s.popupBody.Render("   ") + s.popupAccent.Render(keyListLabel(keys.Browse.Quit)) + s.popupMuted.Render(" cancel")}, s, width)
+	return lipgloss.JoinVertical(lipgloss.Left, mainBox, descriptionBox, footer)
+}
+
+func renderTemplateRow(template sessionconfig.Template, query string, selected bool, s styles, width int) string {
+	match := templateFuzzyMatch(template, query)
+	textStyle := s.muted
+	matchStyle := s.match
+	chipStyle := s.chip
+	chipMatchStyle := s.match.Copy().Background(s.chip.GetBackground())
+	if selected {
+		textStyle = s.selected
+		matchStyle = s.selectedMatch
+		chipStyle = s.selectedChip
+		chipMatchStyle = s.selectedMatch.Copy().Background(s.selectedChip.GetBackground())
+	}
+
+	const (
+		contentIndent     = 2
+		chipColumnWidth   = 6
+		nameColumnWidth   = 24
+		templateColumnGap = 2
+	)
+
+	chip := strings.TrimSpace(template.Chip)
+	renderedChip := ""
+	if chip != "" {
+		renderedChip = renderTemplateChip(chip, chipStyle, chipMatchStyle, match.AliasIndexes[chip])
+	}
+	chipColumn := fitStyledColumn(renderedChip, chipColumnWidth, textStyle)
+	name := truncate(template.Name, nameColumnWidth)
+	nameColumn := fitStyledColumn(renderMatchedText(name, textStyle, matchStyle, match.TitleIndexes), nameColumnWidth, textStyle)
+	indicatorStyle := lipgloss.NewStyle().
+		Foreground(s.glyph.GetForeground()).
+		Background(textStyle.GetBackground())
+	if selected {
+		indicatorStyle = indicatorStyle.Foreground(s.selectedMatch.GetForeground())
+	}
+	indent := textStyle.Render(strings.Repeat(" ", contentIndent))
+	gap := textStyle.Render(strings.Repeat(" ", templateColumnGap))
+	indicatorColumnWidth := max(0, width-contentIndent-chipColumnWidth-nameColumnWidth-(templateColumnGap*2))
+	indicators := strings.Join(template.WindowIndicators, " · ")
+	indicatorColumn := fitStyledColumn(
+		renderMatchedText(indicators, indicatorStyle, matchStyle, match.FieldIndexes["window_indicators"]),
+		indicatorColumnWidth,
+		textStyle,
+	)
+	line := indent + chipColumn + gap + nameColumn + gap + indicatorColumn
+	if selected {
+		return padSelectedRow(line, width, s)
+	}
+	return fitRow(line, width)
+}
+
+func templateFuzzyMatch(template sessionconfig.Template, query string) fuzzy.Match {
+	matches := fuzzy.Filter([]fuzzy.Candidate{templateFuzzyCandidate(template)}, query)
+	if len(matches) == 0 {
+		return fuzzy.Match{}
+	}
+	return matches[0]
+}
+
+func renderTemplateChip(chip string, style lipgloss.Style, matchStyle lipgloss.Style, indexes []int) string {
+	return style.Render(" ") + renderMatchedText(chip, style, matchStyle, indexes) + style.Render(" ")
+}
+
+func fitStyledColumn(value string, width int, fillStyle lipgloss.Style) string {
+	if lipgloss.Width(value) > width {
+		return ansi.Cut(value, 0, width)
+	}
+	return value + fillStyle.Render(strings.Repeat(" ", width-lipgloss.Width(value)))
+}
+
+func renderTemplateSectionHeader(section string, active bool, s styles, width int) string {
+	label := strings.ToUpper(section) + " "
+	labelStyle, lineStyle := templateSectionStyles(active, s)
+	prefix := labelStyle.Render(label)
+	lineWidth := width - lipgloss.Width(prefix)
+	if lineWidth < 1 {
+		lineWidth = 1
+	}
+	return prefix + lineStyle.Render(strings.Repeat("─", lineWidth))
+}
+
+func templateSectionStyles(active bool, s styles) (lipgloss.Style, lipgloss.Style) {
+	if !active {
+		return s.muted, s.muted
+	}
+	return lipgloss.NewStyle().
+			Foreground(s.popupAccent.GetForeground()).
+			Bold(true),
+		s.filterLabel
+}
+
+func templateSource(template sessionconfig.Template) string {
+	if isNoTemplatePickerItem(template) {
+		return sessionconfig.SourceGlobal
+	}
+	source := strings.TrimSpace(template.Source)
+	if source == "" {
+		return sessionconfig.SourceGlobal
+	}
+	return source
+}
+
+func templateSourceRank(template sessionconfig.Template) int {
+	switch templateSource(template) {
+	case sessionconfig.SourceLocal:
+		return 0
+	case sessionconfig.SourceGlobal:
+		return 1
+	default:
+		return 2
+	}
+}
+
+func templateDisplayRow(templates []sessionconfig.Template, templateIndex int) int {
+	if templateIndex < 0 {
+		return 0
+	}
+	row := templateIndex
+	for i := 0; i <= templateIndex && i < len(templates); i++ {
+		if templateStartsSection(templates, i) {
+			row++
+		}
+	}
+	return row
+}
+
+func templateScrollDisplayRow(templates []sessionconfig.Template, templateIndex int) int {
+	row := templateDisplayRow(templates, templateIndex)
+	if templateStartsSection(templates, templateIndex) && row > 0 {
+		return row - 1
+	}
+	return row
+}
+
+func templateDisplayRowCount(templates []sessionconfig.Template) int {
+	count := len(templates)
+	for i := range templates {
+		if templateStartsSection(templates, i) {
+			count++
+		}
+	}
+	return count
+}
+
+func templateStartsSection(templates []sessionconfig.Template, index int) bool {
+	if index < 0 || index >= len(templates) {
+		return false
+	}
+	return index == 0 || templateSource(templates[index-1]) != templateSource(templates[index])
+}
+
+func templateIndexAtDisplayRow(templates []sessionconfig.Template, displayRow int) (int, string) {
+	row := 0
+	for i, template := range templates {
+		if templateStartsSection(templates, i) {
+			if row == displayRow {
+				return -1, templateSource(template)
+			}
+			row++
+		}
+		if row == displayRow {
+			return i, ""
+		}
+		row++
+	}
+	return -1, ""
 }
 
 func renderConfirmKill(s styles, dialogs config.Dialogs, sessionName string, choice confirmChoice, appWidth int, appHeight int) string {
@@ -3870,33 +4600,37 @@ func renderPathNoticePopupWithKeys(s styles, dialogs config.Dialogs, acceptKeys 
 }
 
 func renderHelpPanel(s styles, dialogs config.Dialogs, previous mode, cursor int, scroll int, appWidth int, appHeight int) string {
-	return renderHelpPanelWithKeys(s, dialogs, config.Default().UI.Keys, previous, cursor, scroll, appWidth, appHeight)
+	return renderHelpPanelWithKeys(s, dialogs, config.Default().UI.Keys, previous, "", cursor, scroll, appWidth, appHeight)
 }
 
-func renderHelpPanelWithKeys(s styles, dialogs config.Dialogs, keys config.KeyBindings, previous mode, cursor int, scroll int, appWidth int, appHeight int) string {
+func renderHelpPanelWithKeys(s styles, dialogs config.Dialogs, keys config.KeyBindings, previous mode, query string, cursor int, scroll int, appWidth int, appHeight int) string {
 	items := helpItemsForModeWithKeys(previous, keys)
 	if len(items) == 0 {
 		items = helpItemsForModeWithKeys(modeBrowse, keys)
 	}
+	matches := filterHelpItems(items, query)
 	if cursor < 0 {
 		cursor = 0
 	}
-	if cursor >= len(items) {
-		cursor = len(items) - 1
+	if cursor >= len(matches) {
+		cursor = len(matches) - 1
 	}
 	frame := panelDialogFrame(dialogs, appWidth, appHeight)
 	width := frame.width
-	description := helpDescription(items[cursor])
+	description := "Type to fuzzy-search help."
+	if len(matches) > 0 && cursor >= 0 {
+		description = helpDescription(matches[cursor].item)
+	}
 	descriptionLines := wrapHelpDescription(description, helpDescriptionTextWidth(width))
-	height := helpListHeightForFrame(frame)
+	height := commandListHeightForFrame(frame)
 	if scroll < 0 {
 		scroll = 0
 	}
 	if scroll > cursor {
 		scroll = cursor
 	}
-	if scroll+height > len(items) {
-		scroll = len(items) - height
+	if scroll+height > len(matches) {
+		scroll = len(matches) - height
 		if scroll < 0 {
 			scroll = 0
 		}
@@ -3915,33 +4649,42 @@ func renderHelpPanelWithKeys(s styles, dialogs config.Dialogs, keys config.KeyBi
 	}
 	var b strings.Builder
 	b.WriteString("\n")
+	b.WriteString(renderCommandInput(query, s, bodyWidth))
+	b.WriteString("\n\n")
 	for rowIndex := 0; rowIndex < height; rowIndex++ {
 		itemIndex := scroll + rowIndex
+		selected := itemIndex < len(matches) && itemIndex == cursor
 		row := strings.Repeat(" ", rowWidth)
-		if itemIndex < len(items) {
-			row = renderHelpRow(items[itemIndex], itemIndex == cursor, s, rowWidth)
+		if itemIndex < len(matches) {
+			row = renderHelpRow(matches[itemIndex], selected, s, rowWidth)
+		} else if rowIndex == 0 && len(matches) == 0 {
+			row = s.muted.Render(truncate("No matching help entries", rowWidth))
 		}
 		if rowWidth != bodyWidth {
-			row += s.root.Render(" ") + renderHelpScrollbar(rowIndex, scroll, height, len(items), s)
+			row = renderPopupSelectionMarker(selected, s) + row + renderHelpScrollbar(rowIndex, scroll, height, len(matches), s)
 		}
 		b.WriteString(row)
 		b.WriteString("\n")
 	}
-	mainBox := renderTitledBox(helpTitle(previous), helpPositionLabel(cursor, len(items)), b.String(), width, panelHeight, horizontalPadding, s)
+	mainBox := renderTitledBox(helpTitle(previous), helpPositionLabel(cursor, len(matches)), b.String(), width, panelHeight, horizontalPadding, s)
 	descriptionBox := renderHelpDescription(descriptionLines, s, width)
 	return lipgloss.JoinVertical(lipgloss.Left, mainBox, descriptionBox)
 }
 
-func renderHelpRow(item helpItem, selected bool, s styles, width int) string {
+func renderHelpRow(match helpMatch, selected bool, s styles, width int) string {
+	item := match.item
 	keyWidth := 14
 	key := truncate(item.Key, keyWidth)
 	actionBudget := width - keyWidth - 3
 	if actionBudget < 1 {
 		actionBudget = 1
 	}
-	line := s.warn.Width(keyWidth).Render(key) + s.muted.Render("  ") + s.muted.Render(truncate(item.Action, actionBudget))
+	action := truncate(item.Action, actionBudget)
+	renderedKey := fitStyledColumn(renderMatchedText(key, s.warn, s.match, match.keyIndexes), keyWidth, s.warn)
+	line := renderedKey + s.muted.Render("  ") + renderMatchedText(action, s.muted, s.match, match.actionIndexes)
 	if selected {
-		line = s.selected.Width(keyWidth).Render(key) + s.selected.Render("  "+truncate(item.Action, actionBudget))
+		renderedKey = fitStyledColumn(renderMatchedText(key, s.selected, s.selectedMatch, match.keyIndexes), keyWidth, s.selected)
+		line = renderedKey + s.selected.Render("  ") + renderMatchedText(action, s.selected, s.selectedMatch, match.actionIndexes)
 		return padSelectedRow(line, width, s)
 	}
 	return line
@@ -4356,6 +5099,14 @@ func commandListHeightForFrame(frame dialogFrame) int {
 	return height
 }
 
+func templateListHeightForFrame(frame dialogFrame) int {
+	height := helpListHeightForFrame(frame) - 3
+	if height < 3 {
+		height = 3
+	}
+	return height
+}
+
 func helpItemsForMode(previous mode) []helpItem {
 	return helpItemsForModeWithKeys(previous, config.Default().UI.Keys)
 }
@@ -4386,26 +5137,27 @@ func helpItemsForModeWithKeys(previous mode, keys config.KeyBindings) []helpItem
 			helpItemFromSpec(specs[4]),
 			helpItemFromSpec(specs[5]),
 			helpItemFromSpec(specs[6]),
-			{Key: keyListLabel(keys.PathSearch.CommandPalette), Action: "command palette", Description: "Open the command palette for path-search actions."},
 			helpItemFromSpec(specs[7]),
+			{Key: keyListLabel(keys.PathSearch.CommandPalette), Action: "command palette", Description: "Open the command palette for path-search actions."},
 			helpItemFromSpec(specs[8]),
+			helpItemFromSpec(specs[9]),
 		}
 	}
 	if previous == modeCommands {
 		specs := browseCommandSpecsFor(keys)
 		return []helpItem{
 			{Key: "type", Action: "filter commands", Description: "Fuzzy-search commands by title, key, and description."},
-			{Key: keyListLabel(keys.Commands.DeleteChar), Action: "remove character", Description: "Remove one character from the command search prompt."},
-			{Key: keyListLabel(keys.Commands.DeleteWord), Action: "remove word", Description: "Remove one word from the command search prompt."},
-			{Key: keyListLabel(keys.Commands.ClearInput), Action: "clear prompt", Description: "Clear the command search prompt."},
-			{Key: combinedKeyLabel(keys.Commands.Up, keys.Commands.Down), Action: "move selection", Description: "Move through available commands."},
-			{Key: combinedKeyLabel(keys.Commands.ScrollUp, keys.Commands.ScrollDown), Action: "scroll commands", Description: "Scroll the command viewport one row while keeping the selection visible."},
-			{Key: combinedKeyLabel(keys.Commands.PageUp, keys.Commands.PageDown), Action: "page commands", Description: "Move the selection by half a page through available commands."},
+			{Key: keyListLabel(keys.Browse.DeleteChar), Action: "remove character", Description: "Remove one character from the command search prompt."},
+			{Key: keyListLabel(keys.Browse.DeleteWord), Action: "remove word", Description: "Remove one word from the command search prompt."},
+			{Key: keyListLabel(keys.Browse.ClearInput), Action: "clear prompt", Description: "Clear the command search prompt."},
+			{Key: combinedKeyLabel(keys.Browse.Up, keys.Browse.Down), Action: "move selection", Description: "Move through available commands."},
+			{Key: combinedKeyLabel(keys.Browse.ScrollUp, keys.Browse.ScrollDown), Action: "scroll commands", Description: "Scroll the command viewport one row while keeping the selection visible."},
+			{Key: combinedKeyLabel(keys.Browse.PageUp, keys.Browse.PageDown), Action: "page commands", Description: "Move the selection by half a page through available commands."},
 			{Key: keyListLabel(keys.Commands.RunSelected), Action: "run selected command", Description: "Run the selected command when it is available in the current context."},
 			{Key: keyListLabel(keys.Commands.Close), Action: "close palette", Description: "Close the command palette and return to the previous mode."},
 			{Key: keyListLabel(keys.Help.Close), Action: "close help", Description: "Close help and return to the command palette."},
 			{Key: keyListLabel(keys.Commands.Help), Action: "toggle help", Description: "Show or close this help popup."},
-			{Key: "Quit command", Action: specs[10].Title, Description: specs[10].Description},
+			{Key: "Quit command", Action: specs[11].Title, Description: specs[11].Description},
 		}
 	}
 	specs := browseCommandSpecsFor(keys)
@@ -4430,5 +5182,6 @@ func helpItemsForModeWithKeys(previous mode, keys config.KeyBindings) []helpItem
 		helpItemFromSpec(specs[2]),
 		helpItemFromSpec(specs[9]),
 		helpItemFromSpec(specs[10]),
+		helpItemFromSpec(specs[11]),
 	}
 }

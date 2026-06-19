@@ -7,6 +7,7 @@ import (
 	"github.com/sschmerda/tmux-parator/internal/discovery"
 	"github.com/sschmerda/tmux-parator/internal/fuzzy"
 	"github.com/sschmerda/tmux-parator/internal/pathsearch"
+	"github.com/sschmerda/tmux-parator/internal/sessionconfig"
 	"github.com/sschmerda/tmux-parator/internal/tmux"
 )
 
@@ -246,6 +247,29 @@ func (c candidate) rootLabel() string {
 		return ""
 	default:
 		return ""
+	}
+}
+
+func templateFuzzyCandidate(t sessionconfig.Template) fuzzy.Candidate {
+	aliases := []string{t.ID}
+	if chip := strings.TrimSpace(t.Chip); chip != "" {
+		aliases = append([]string{chip}, aliases...)
+	}
+	fields := []fuzzy.Field{
+		{Name: "id", Value: t.ID, Weight: 1000},
+	}
+	if !isNoTemplatePickerItem(t) && strings.TrimSpace(t.Description) != "" {
+		fields = append(fields, fuzzy.Field{Name: "description", Value: t.Description, Weight: 250})
+	}
+	if indicators := strings.Join(t.WindowIndicators, " · "); strings.TrimSpace(indicators) != "" {
+		fields = append(fields, fuzzy.Field{Name: "window_indicators", Value: indicators, Weight: 500})
+	}
+	return fuzzy.Candidate{
+		Title:    t.Name,
+		Category: "Templates",
+		Aliases:  aliases,
+		Fields:   fields,
+		Value:    t,
 	}
 }
 

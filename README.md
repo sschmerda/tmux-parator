@@ -102,20 +102,22 @@ Path search:
 | `Tab` / `Shift-Tab` | Complete or narrow the current path segment forward/backward. |
 | `Left` / `Right` | Accept the current completion cycle. |
 | `Enter` | Open the selected path result. |
+| `Ctrl-l` | Create the selected path result with a chosen session template, or with no template. |
 | `Ctrl-p` | Open the exact typed path when it exists. |
 | `Ctrl-a` | Create the exact typed path after confirmation. |
 | `Ctrl-o` | Cycle the prompt root. |
 | `Ctrl-t` / `Esc` | Close path search. |
 
-Command palette and help:
+Command palette, template picker, and help:
 
 | Key | Action |
 | --- | --- |
-| `Up` / `Down` | Move command selection one row. |
-| `Ctrl-y` / `Ctrl-e` | Scroll the command/help viewport up/down one row. |
+| `Up` / `Down` | Move selection one row. |
+| `Ctrl-y` / `Ctrl-e` | Scroll the popup viewport up/down one row. |
 | `PgUp` / `Ctrl-b` | Move selection up by half a page. |
 | `PgDown` / `Ctrl-d` | Move selection down by half a page. |
-| `Enter` | Run the selected command. |
+| Prompt editing keys | Edit the fuzzy-search query. |
+| `Enter` | Run the selected command or create the selected template. |
 | `Esc` / `Ctrl-g` | Close the command palette. |
 | `Ctrl-?` | Toggle help. |
 
@@ -139,6 +141,12 @@ In the command palette:
 - `?` opens help.
 - `Open last session` switches to tmux's last active session.
 - Toggle commands and `Quit` are available from the palette.
+
+In help:
+
+- Type to fuzzy-search actions, displayed keys, and descriptions.
+- Navigation and prompt editing use `[ui.keys.browse]`.
+- `Esc` or `Ctrl-?` closes help.
 
 Direct session toggle:
 
@@ -215,6 +223,8 @@ Path search:
   in the directory name.
 - `Tab` completes or narrows the current path segment from direct children or
   the selected fuzzy result.
+- `Ctrl-l` opens the template picker for the selected path result. The picker
+  also includes a no-template option.
 
 Path search ranking:
 
@@ -254,6 +264,9 @@ Command palette ranking:
 - Command title has the highest weight.
 - Key binding, command id, description, and disabled reason are lower-weight
   searchable fields.
+
+Help uses the same popup layout and fuzzy matcher. Action names have the
+highest weight, followed by displayed keys and descriptions.
 
 ## Themes
 
@@ -310,7 +323,7 @@ changes the app defaults after rebuilding.
 For one-off local testing, point the app at any config file:
 
 ```sh
-TMUX_PARATOR_CONFIG=examples/config.toml ./bin/tmux-parator
+TMUX_PARATOR_CONFIG=examples/tmux-parator/config.toml ./bin/tmux-parator
 ```
 
 The configuration is organized in two layers:
@@ -548,6 +561,269 @@ path = "~/work/client-a"    -> client-a/api
 
 Selecting a root candidate creates a detached tmux session in that path and
 switches to it.
+
+## Session Templates
+
+Session templates live next to the main config in a `templates/` directory.
+The normal config layout is:
+
+```text
+~/.config/tmux-parator/
+  config.toml
+  templates/
+    repo.toml
+    scripts/
+      notes.sh
+      setup.sh
+```
+
+Each `templates/*.toml` file defines one template. Template files are loaded in
+filename order.
+
+A workspace can also define one local template at
+`.tmux-parator/template.toml`. Local templates are discovered when opening a
+workspace. On Enter, a local template overrides matching global templates after
+showing a notice first. On `Ctrl-l`, the local template appears at the top of
+the template picker. Local and global templates are grouped under separate
+section headings, with the active section highlighted. `Tab` and `Shift-Tab`
+jump between sections; the normal configured browse navigation keys move
+between template rows.
+
+For local experiments, `./.dev/templates/*.toml` is used when that directory is
+present in the current working directory. Otherwise templates are loaded from
+the directory that contains `TMUX_PARATOR_CONFIG` or the resolved main config
+file. If no main config path is available, they are loaded from:
+
+```text
+$XDG_CONFIG_HOME/tmux-parator/templates/*.toml
+```
+
+or, when `XDG_CONFIG_HOME` is unset:
+
+```text
+~/.config/tmux-parator/templates/*.toml
+```
+
+`TMUX_PARATOR_SESSION_CONFIG` overrides all of these paths. It can point to a
+config directory or a single template file.
+
+Local template example:
+
+```toml
+id = "local"
+name = "Local Workspace"
+focus = "work.main"
+description = "Project-local workspace layout."
+chip = "lw"
+window_indicators = [" editor", " git"]
+
+[[hooks.before_create_command]]
+run = "git fetch --quiet"
+kinds = ["repo"]
+
+[[windows]]
+name = "work"
+focus = "main"
+
+[windows.layout]
+type = "columns"
+sizes = [70, 30]
+children = ["main", "side"]
+
+[windows.layout.main]
+type = "pane"
+command = "nvim ."
+
+[windows.layout.side]
+type = "pane"
+command = "git status --short"
+```
+
+See `examples/tmux-parator/` for a complete example directory. This is
+`examples/tmux-parator/templates/repo.toml`:
+
+```toml
+id = "repo"
+name = "Repository"
+focus = "shell.main.editor"
+description = "Three-window repository workspace with nested panes."
+chip = "r"
+window_indicators = [" shell", " git", "󰇥 files", "󰎚 scratch"]
+enabled = true
+match = ["~/code/repos/*", "~/work/*"]
+
+[[hooks.before_create_command]]
+run = "git fetch --quiet"
+kinds = ["repo"]
+
+[[hooks.after_create_script]]
+run = "ready.sh"
+kinds = ["repo"]
+
+[[windows]]
+name = "shell"
+focus = "main.editor"
+
+[windows.layout]
+type = "columns"
+sizes = [25, 50, 25]
+children = ["left", "main", "right"]
+
+[windows.layout.left]
+type = "pane"
+path = "."
+command = ["git status --short", "git branch --show-current"]
+
+[windows.layout.main]
+type = "rows"
+sizes = [80, 20]
+children = ["editor", "tests"]
+
+[windows.layout.main.editor]
+type = "pane"
+path = "."
+command = "nvim ."
+
+[windows.layout.main.tests]
+type = "pane"
+path = "."
+command = "go test ./..."
+
+[windows.layout.right]
+type = "pane"
+path = "."
+command = "git log --oneline -5"
+
+[[windows]]
+name = "git"
+
+[windows.layout]
+type = "pane"
+name = "lazygit"
+path = "."
+command = "lazygit"
+
+[[windows]]
+name = "files"
+
+[windows.layout]
+type = "pane"
+name = "yazi"
+path = "."
+command = "yazi"
+command_mode = "wrapper"
+
+[[windows]]
+name = "scratch"
+
+[windows.layout]
+type = "pane"
+name = "notes"
+path = "docs"
+script = ["setup.sh", "notes.sh"]
+```
+
+Session template fields:
+
+| Field | Scope | Description |
+| --- | --- | --- |
+| `id` | template | Required stable identifier. It must be unique. |
+| `name` | template | Required display name. It must be unique, and enabled templates are sorted by this name. |
+| `focus` | template | Required final startup target in `window.pane.path` form, for example `shell.main.editor`. It must resolve to a pane. |
+| `description` | template | Optional description shown in the template picker. |
+| `chip` | template | Optional short searchable abbreviation rendered before the template name for quick fuzzy selection. |
+| `window_indicators` | template | Optional string or string list shown after the template name to summarize the template's windows. Entries may contain glyphs, text, or both and are separated by `·`. Indicator text participates in fuzzy search. |
+| `enabled` | template | Optional flag for showing the template. Defaults to `true`. |
+| `match` | template | Optional path pattern or pattern list used by Enter to create matching paths with this template automatically. |
+| `hooks.before_create_command` | template | Optional array of hook tables. Each `[[hooks.before_create_command]]` entry runs one shell command before the tmux session is created. |
+| `hooks.before_create_script` | template | Optional array of hook tables. Each `[[hooks.before_create_script]]` entry resolves `run` under `scripts/` next to the template file, then runs that script before the tmux session is created. |
+| `hooks.after_create_command` | template | Optional array of hook tables. Each `[[hooks.after_create_command]]` entry runs one shell command after the tmux session, windows, panes, metadata, and initial selection are created. |
+| `hooks.after_create_script` | template | Optional array of hook tables. Each `[[hooks.after_create_script]]` entry resolves `run` under `scripts/` next to the template file, then runs that script after the tmux session is created. |
+| `hooks.*.run` | hook table | Required command string or script name for that hook entry. |
+| `hooks.*.kinds` | hook table | Optional session kind list. When set, the hook runs only when the created session metadata kind matches one of the listed values such as `repo`, `subdir`, `path`, or `manual`. |
+| `windows.name` | window | Required tmux window name. |
+| `windows.focus` | window | Optional dot path to the pane made active within that window after layout creation, for example `main.editor`. It must resolve to a pane, not a layout group. Template-level `focus` still controls the final startup window and pane. |
+| `windows.layout.type` | layout node | Required node type: `pane`, `columns`, or `rows`. |
+| `windows.layout.name` | root pane | Required only when the window root layout is a single `pane`. Child pane names normally come from the parent `children` list. |
+| `windows.layout.path` | pane | Optional pane working directory. Relative paths are resolved under the selected workspace path. `.` or an empty value use the selected workspace path. |
+| `windows.layout.command` | pane | Optional command or command list sent to the pane followed by Enter. Lists are sent as individual commands in order. |
+| `windows.layout.command_mode` | pane | Optional command launch mode. `interactive` sends the command to the pane's shell with `tmux send-keys`. `wrapper` starts the pane with `/bin/sh -lc` and runs pane commands as a small shell script before `exec`-ing the final login shell. Defaults to `interactive`. |
+| `windows.layout.script` | pane | Optional script name or script list resolved under `scripts/` next to the template file, then sent to the pane followed by Enter as individual commands in order. Mutually exclusive with `command`. |
+| `windows.layout.sizes` | `columns`/`rows` | Required positive integer weights, one per child. Values are relative and do not need to sum to `100`. |
+| `windows.layout.children` | `columns`/`rows` | Required child node names. Each child must have a matching nested table. |
+
+Layout rules:
+
+- `glyphs` is accepted as a deprecated alias for `window_indicators`. Do not
+  configure both fields in the same template.
+- `pane` is a leaf. It cannot define `sizes` or `children`.
+- `columns` splits panes horizontally; `rows` splits panes vertically.
+- `sizes = [25, 50, 25]` means the middle child receives twice the space of
+  either side child. `[1, 1, 1]` and `[33, 33, 33]` both mean equal thirds.
+- Terminal cells are integers, so exact percentages are rounded. Remainder
+  cells are distributed to preserve relative weights and mirrored panes where
+  possible.
+- Child pane names come from the parent `children` list. In
+  `children = ["editor"]`, `[windows.layout.editor]` defines a pane
+  named `editor` unless it explicitly sets `name`.
+- A root single-pane window has no parent `children` list, so it must set
+  `name`.
+- `match` supports exact paths and Go `filepath.Match` globs. Plain paths act
+  as subtree matches, so `~/stefan/code` applies to all paths below that
+  directory. `~` expands to the home directory; relative patterns are resolved
+  from the directory containing the template file.
+- When Enter creates a new session for a root or path-search result, the most
+  specific enabled template whose `match` pattern matches the selected path is
+  used automatically. Deeper paths win over broader parents, and exact paths
+  win over globs. Existing path sessions are still switched to instead of
+  recreated. `Ctrl-l` always opens the template picker for manual selection,
+  including a no-template option. The picker shows chips, names, and window
+  indicators, and fuzzy-searches chips, names, ids, descriptions, and window
+  indicators.
+- `command` and `script` are mutually exclusive. Use `command` for inline
+  commands and `script` for dotfile-managed scripts such as
+  `~/.config/tmux-parator/templates/scripts/setup.sh`.
+- `command_mode = "interactive"` is the default and is the most robust option
+  for normal shells and TUIs. It visibly types the command at the prompt before
+  pressing Enter.
+- `command_mode = "wrapper"` is useful for programs with terminal startup
+  quirks such as `yazi`. It avoids `send-keys`, but the command runs in a
+  wrapper shell before control is handed to the final interactive shell.
+- Template-level hooks are configured as repeated TOML tables such as
+  `[[hooks.before_create_command]]`. Each table represents one hook entry with
+  a required `run` value and an optional `kinds` filter.
+- Session hook entries are run by `tmux-parator` outside tmux panes. Their
+  output is hidden on success and included in the error when a hook fails.
+- Session hooks are non-interactive. They have no controlling terminal, and
+  Git credential prompts and SSH password prompts are disabled. Configure a
+  credential helper or SSH key first; otherwise commands such as `git fetch`
+  fail and report an error instead of waiting for input.
+- Hook entries are evaluated in file order within each hook list.
+- If a hook entry has `kinds = ["repo"]`, it runs only for sessions whose
+  metadata kind is `repo`. When `kinds` is omitted, the hook runs for all
+  session kinds.
+- If a `before_create` hook fails, the tmux session is not created.
+- After `tmux new-session` succeeds, creation is transactional for the tmux
+  session. If creating a window or pane, applying metadata or focus, or running
+  an `after_create` hook fails, tmux-parator kills the partial session before
+  returning the error. If cleanup also fails, both errors are reported.
+- Relative `script` values are resolved from the directory containing the
+  template file: in `templates/repo.toml`, `script = "setup.sh"` runs
+  `templates/scripts/setup.sh`.
+- `[[hooks.before_create_script]]` with `run = "setup.sh"` and
+  `[[hooks.after_create_script]]` with `run = "ready.sh"` run those resolved
+  scripts outside tmux in the selected workspace.
+- `command = ["make generate", "go test ./..."]` sends `make generate` and
+  then `go test ./...` as separate pane commands. `script` lists use the same
+  ordering after each script path is resolved.
+- Pane `command` and `script` entries do not have per-kind conditions. They are
+  pane startup commands, intended to be visible in the pane when they run.
+- Template `focus` starts with a window name, followed by child names joined by
+  dots, and must end at a pane. For example, `shell.main.editor` targets the
+  `editor` pane below the `main` group in the `shell` window.
+- Window `focus` omits the window prefix. For example, `main.editor` is valid
+  within that `shell` window; `main` alone is invalid when it points at a
+  layout group.
 
 ## Session Names And Metadata
 

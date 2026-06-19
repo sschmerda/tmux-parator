@@ -82,7 +82,7 @@ func Filter(candidates []Candidate, query string) []Match {
 			}
 			match.Score += fieldMatch.score
 			mergeFieldMatch(&match, fieldMatch)
-			mergeExtraFieldHighlights(&match, token, searchableFields(candidate))
+			mergeSecondaryFieldHighlights(&match, token, searchableFields(candidate))
 		}
 		if ok {
 			match.TitleIndexes = sortedUnique(match.TitleIndexes)
@@ -132,13 +132,17 @@ func bestFieldMatch(token string, fields []field) (fieldMatch, bool) {
 	return best, found
 }
 
-func mergeExtraFieldHighlights(match *Match, token string, fields []field) {
+func mergeSecondaryFieldHighlights(match *Match, token string, fields []field) {
 	for _, field := range fields {
-		if field.kind != fieldExtra {
+		if field.kind != fieldAlias && field.kind != fieldExtra {
 			continue
 		}
 		matches := sahilfuzzy.Find(token, []string{field.value})
 		if len(matches) == 0 {
+			continue
+		}
+		if field.kind == fieldAlias {
+			match.AliasIndexes[field.alias] = append(match.AliasIndexes[field.alias], matches[0].MatchedIndexes...)
 			continue
 		}
 		match.FieldIndexes[field.name] = append(match.FieldIndexes[field.name], matches[0].MatchedIndexes...)

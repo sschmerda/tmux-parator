@@ -50,6 +50,7 @@ type BrowseKeys struct {
 	KillSession         []string `toml:"kill_session"`
 	RenameSession       []string `toml:"rename_session"`
 	NewSession          []string `toml:"new_session"`
+	TemplateSession     []string `toml:"template_session"`
 	PathSearch          []string `toml:"path_search"`
 	Reload              []string `toml:"reload"`
 	ToggleHidden        []string `toml:"toggle_hidden"`
@@ -73,6 +74,7 @@ type PathSearchKeys struct {
 	Help             []string `toml:"help"`
 	OpenSelected     []string `toml:"open_selected"`
 	OpenLastSession  []string `toml:"open_last_session"`
+	TemplateSession  []string `toml:"template_session"`
 	OpenTyped        []string `toml:"open_typed"`
 	CreateTyped      []string `toml:"create_typed"`
 	CycleRoot        []string `toml:"cycle_root"`
@@ -238,6 +240,7 @@ type rawBrowseKeys struct {
 	KillSession         []string `toml:"kill_session"`
 	RenameSession       []string `toml:"rename_session"`
 	NewSession          []string `toml:"new_session"`
+	TemplateSession     []string `toml:"template_session"`
 	PathSearch          []string `toml:"path_search"`
 	Reload              []string `toml:"reload"`
 	ToggleHidden        []string `toml:"toggle_hidden"`
@@ -261,6 +264,7 @@ type rawPathSearchKeys struct {
 	Help             []string `toml:"help"`
 	OpenSelected     []string `toml:"open_selected"`
 	OpenLastSession  []string `toml:"open_last_session"`
+	TemplateSession  []string `toml:"template_session"`
 	OpenTyped        []string `toml:"open_typed"`
 	CreateTyped      []string `toml:"create_typed"`
 	CycleRoot        []string `toml:"cycle_root"`
@@ -562,6 +566,7 @@ func mergeBrowseKeys(raw rawBrowseKeys, fallback BrowseKeys) BrowseKeys {
 	keys.KillSession = mergeKeyList(raw.KillSession, keys.KillSession)
 	keys.RenameSession = mergeKeyList(raw.RenameSession, keys.RenameSession)
 	keys.NewSession = mergeKeyList(raw.NewSession, keys.NewSession)
+	keys.TemplateSession = mergeKeyList(raw.TemplateSession, keys.TemplateSession)
 	keys.PathSearch = mergeKeyList(raw.PathSearch, keys.PathSearch)
 	keys.Reload = mergeKeyList(raw.Reload, keys.Reload)
 	keys.ToggleHidden = mergeKeyList(raw.ToggleHidden, keys.ToggleHidden)
@@ -678,6 +683,7 @@ func defaultKeyBindings() KeyBindings {
 			KillSession:         []string{"ctrl+k"},
 			RenameSession:       []string{"ctrl+n"},
 			NewSession:          []string{"ctrl+s"},
+			TemplateSession:     []string{"ctrl+l"},
 			PathSearch:          []string{"ctrl+t"},
 			Reload:              []string{"ctrl+r"},
 			ToggleHidden:        []string{"alt+h", "meta+h"},
@@ -700,6 +706,7 @@ func defaultKeyBindings() KeyBindings {
 			Help:             []string{"ctrl+_"},
 			OpenSelected:     []string{"enter"},
 			OpenLastSession:  []string{"ctrl+@"},
+			TemplateSession:  []string{"ctrl+l"},
 			OpenTyped:        []string{"ctrl+p"},
 			CreateTyped:      []string{"ctrl+a"},
 			CycleRoot:        []string{"ctrl+o"},
@@ -1105,6 +1112,7 @@ func validateKeyBindings(keys KeyBindings) error {
 				{name: "kill_session", keys: keys.Browse.KillSession},
 				{name: "rename_session", keys: keys.Browse.RenameSession},
 				{name: "new_session", keys: keys.Browse.NewSession},
+				{name: "template_session", keys: keys.Browse.TemplateSession},
 				{name: "path_search", keys: keys.Browse.PathSearch},
 				{name: "reload", keys: keys.Browse.Reload},
 				{name: "toggle_hidden", keys: keys.Browse.ToggleHidden},
@@ -1130,6 +1138,7 @@ func validateKeyBindings(keys KeyBindings) error {
 				{name: "help", keys: keys.PathSearch.Help},
 				{name: "open_selected", keys: keys.PathSearch.OpenSelected},
 				{name: "open_last_session", keys: keys.PathSearch.OpenLastSession},
+				{name: "template_session", keys: keys.PathSearch.TemplateSession},
 				{name: "open_typed", keys: keys.PathSearch.OpenTyped},
 				{name: "create_typed", keys: keys.PathSearch.CreateTyped},
 				{name: "cycle_root", keys: keys.PathSearch.CycleRoot},

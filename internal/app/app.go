@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sschmerda/tmux-parator/internal/config"
 	"github.com/sschmerda/tmux-parator/internal/discovery"
+	"github.com/sschmerda/tmux-parator/internal/sessionconfig"
 	"github.com/sschmerda/tmux-parator/internal/theme"
 	"github.com/sschmerda/tmux-parator/internal/tmux"
 	"github.com/sschmerda/tmux-parator/internal/ui"
@@ -19,6 +20,10 @@ func Run(args []string) error {
 	ctx := context.Background()
 	runner := tmux.ExecRunner{}
 	cfg, configPath, err := config.Load()
+	if err != nil {
+		return err
+	}
+	sessionCfg, sessionConfigPath, err := sessionconfig.Load(configPath)
 	if err != nil {
 		return err
 	}
@@ -43,6 +48,13 @@ func Run(args []string) error {
 				}
 				popupCommand = "TMUX_PARATOR_CONFIG=" + shellQuote(absoluteConfigPath) + " " + shellQuote(executable)
 			}
+			if sessionConfigPath != "" {
+				absoluteSessionConfigPath, err := filepath.Abs(sessionConfigPath)
+				if err != nil {
+					return fmt.Errorf("resolve session config path: %w", err)
+				}
+				popupCommand = "TMUX_PARATOR_SESSION_CONFIG=" + shellQuote(absoluteSessionConfigPath) + " " + popupCommand
+			}
 			if envTheme := os.Getenv("TMUX_PARATOR_THEME"); envTheme != "" {
 				popupCommand = "TMUX_PARATOR_THEME=" + shellQuote(envTheme) + " " + popupCommand
 			}
@@ -56,6 +68,7 @@ Controls:
   ctrl-g    command overlay
   ctrl-n    rename selected session
   ctrl-s    create named session
+  ctrl-l    create selected workspace from template
   ctrl-t    path search
   ctrl-r    reload
   ctrl-k    kill selected session
@@ -69,7 +82,8 @@ Bindings can be changed under [ui.keys] in config.toml.`)
 		}
 	}
 
-	model := ui.NewModelWithKeys(tmux.NewClient(runner), activeTheme, cfg.Roots, discovery.OptionsFromConfig(cfg.Discovery), cfg.PathSearch, cfg.UI.Glyphs, cfg.UI.GlyphColors, cfg.UI.Columns, cfg.UI.Keys, cfg.UI.Dialogs)
+	client := tmux.NewClient(runner)
+	model := ui.NewModelWithTemplates(client, activeTheme, cfg.Roots, discovery.OptionsFromConfig(cfg.Discovery), cfg.PathSearch, cfg.UI.Glyphs, cfg.UI.GlyphColors, cfg.UI.Columns, cfg.UI.Keys, sessionCfg.Templates, cfg.UI.Dialogs)
 	_, err = tea.NewProgram(model, tea.WithAltScreen()).Run()
 	return err
 }

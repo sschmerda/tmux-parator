@@ -1,0 +1,27 @@
+id = "local-repo"
+name = "Local Repository"
+focus = "work.main"
+description = "Project-local template discovered from .tmux-parator/template.toml."
+chip = "lr"
+window_indicators = [" work"]
+
+[[hooks.before_create_command]]
+run = "git fetch --quiet"
+kinds = ["repo"]
+
+[[windows]]
+name = "work"
+focus = "main"
+
+[windows.layout]
+type = "columns"
+sizes = [70, 30]
+children = ["main", "side"]
+
+[windows.layout.main]
+type = "pane"
+command = "nvim ."
+
+[windows.layout.side]
+type = "pane"
+command = ["git status --short", "git branch --show-current"]
