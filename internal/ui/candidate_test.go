@@ -1608,7 +1608,7 @@ func TestMainColumnsAndFooterAlignWithSearchInset(t *testing.T) {
 		if strings.Contains(line, "kind") && strings.Contains(line, "root") && strings.Contains(line, "name") {
 			header = line
 		}
-		if strings.Contains(line, "open sessions") {
+		if strings.Contains(line, "OPEN SESSIONS") {
 			section = line
 		}
 		if strings.Contains(line, "PATH OFF") && strings.Contains(line, "HIDDEN SKIP") {
@@ -1665,7 +1665,7 @@ func TestSelectedRowMarkerAlignsWithActiveSectionText(t *testing.T) {
 	row := ansi.Strip(renderInsetRow(renderCandidateRow(item, true, styles, contentWidth, config.Glyphs{}, config.GlyphColors{}, columns), innerWidth, styles))
 
 	markerIndex := renderedColumn(row, "▌")
-	sectionTextIndex := renderedColumn(section, "open sessions")
+	sectionTextIndex := renderedColumn(section, "OPEN SESSIONS")
 	if markerIndex < 0 || sectionTextIndex < 0 {
 		t.Fatalf("missing marker or section text:\nsection: %q\nrow: %q", section, row)
 	}
@@ -1678,8 +1678,11 @@ func TestRenderBrowseSectionHeaderHighlightsActiveSection(t *testing.T) {
 	styles := newStyles(theme.Default())
 	active := renderBrowseSectionHeader("open sessions", true, styles, 80)
 	inactive := renderBrowseSectionHeader("open sessions", false, styles, 80)
-	if strings.Contains(ansi.Strip(active), "> open sessions") {
+	if strings.Contains(ansi.Strip(active), "> OPEN SESSIONS") {
 		t.Fatalf("active header should not include cursor marker: %q", ansi.Strip(active))
+	}
+	if !strings.Contains(ansi.Strip(active), "OPEN SESSIONS") {
+		t.Fatalf("active header is not capitalized: %q", ansi.Strip(active))
 	}
 	if ansi.Strip(active) != ansi.Strip(inactive) {
 		t.Fatalf("active header text = %q, want inactive header text %q", ansi.Strip(active), ansi.Strip(inactive))
@@ -1773,10 +1776,10 @@ func TestPathSearchUsesPathsSectionDivider(t *testing.T) {
 	model.pathResult = []candidate{{kind: candidatePath, fsPath: pathsearch.Candidate{Name: "main", Path: "/tmp/main"}}}
 
 	view := ansi.Strip(model.View())
-	if !strings.Contains(view, "paths") {
+	if !strings.Contains(view, "PATHS") {
 		t.Fatalf("path search view missing paths divider:\n%s", view)
 	}
-	if strings.Contains(view, "open sessions") {
+	if strings.Contains(view, "OPEN SESSIONS") {
 		t.Fatalf("path search view should not use browse session divider:\n%s", view)
 	}
 }

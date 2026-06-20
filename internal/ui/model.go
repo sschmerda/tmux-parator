@@ -3091,6 +3091,7 @@ func renderBrowseSectionHeader(title string, active bool, s styles, width int) s
 	if strings.TrimSpace(title) == "" {
 		title = "results"
 	}
+	title = strings.ToUpper(title)
 	labelStyle := s.muted
 	lineStyle := s.muted
 	labelText := "  " + title + " "
