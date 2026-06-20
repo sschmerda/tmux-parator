@@ -636,6 +636,79 @@ func TestHelpFuzzySearchesActionsKeysAndDescriptions(t *testing.T) {
 	}
 }
 
+func TestPopupFiltersSelectBestResultAndRestorePreviousCursor(t *testing.T) {
+	t.Run("commands", func(t *testing.T) {
+		model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{Enabled: true}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+		model.openCommands(modeBrowse)
+		model.commandCursor = 4
+
+		updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("session")})
+		model = updated.(Model)
+		if model.commandCursor != 0 {
+			t.Fatalf("filtered command cursor = %d, want best result at 0", model.commandCursor)
+		}
+
+		updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlU})
+		model = updated.(Model)
+		if model.commandCursor != 4 {
+			t.Fatalf("cleared command cursor = %d, want previous cursor 4", model.commandCursor)
+		}
+	})
+
+	t.Run("help", func(t *testing.T) {
+		model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+		model.openHelp(modeBrowse)
+		model.helpCursor = 5
+
+		updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("kill")})
+		model = updated.(Model)
+		if model.helpCursor != 0 {
+			t.Fatalf("filtered help cursor = %d, want best result at 0", model.helpCursor)
+		}
+
+		updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlU})
+		model = updated.(Model)
+		if model.helpCursor != 5 {
+			t.Fatalf("cleared help cursor = %d, want previous cursor 5", model.helpCursor)
+		}
+	})
+
+	t.Run("templates", func(t *testing.T) {
+		model := NewModelWithTemplates(
+			nil,
+			theme.Default(),
+			nil,
+			discovery.Options{},
+			config.PathSearch{},
+			config.Glyphs{},
+			config.GlyphColors{},
+			config.Columns{},
+			config.Default().UI.Keys,
+			[]sessionconfig.Template{
+				testTemplate("repo", "Repository"),
+				testTemplate("notes", "Notes"),
+				testTemplate("shell", "Shell"),
+			},
+		)
+		model.mode = modeTemplatePicker
+		model.templateAvailable = model.templates
+		model.templateFiltered = templatePickerItems(model.templateAvailable)
+		model.templateCursor = 2
+
+		updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("repo")})
+		model = updated.(Model)
+		if model.templateCursor != 0 {
+			t.Fatalf("filtered template cursor = %d, want best result at 0", model.templateCursor)
+		}
+
+		updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlU})
+		model = updated.(Model)
+		if model.templateCursor != 2 {
+			t.Fatalf("cleared template cursor = %d, want previous cursor 2", model.templateCursor)
+		}
+	})
+}
+
 func TestBrowseCursorStaysRenderedWhenMovingBelowViewport(t *testing.T) {
 	model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
 	model.width = 100

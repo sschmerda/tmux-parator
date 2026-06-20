@@ -105,10 +105,13 @@ type Model struct {
 	helpCursor           int
 	helpScroll           int
 	helpInput            string
+	helpRestore          int
 	commandCursor        int
 	commandScroll        int
+	commandRestore       int
 	templateCursor       int
 	templateScroll       int
+	templateRestore      int
 	confirmChoice        confirmChoice
 	pathCompletionCursor int
 	pathCompletionInput  string
@@ -516,18 +519,14 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case keyMatches(msg, m.keys.Browse.ScrollDown):
 			m.scrollHelpViewport(1)
 		case keyMatches(msg, m.keys.Browse.DeleteChar):
-			m.helpInput = deleteLastRune(m.helpInput)
-			m.clampHelpCursor()
+			m.setHelpInput(deleteLastRune(m.helpInput))
 		case keyMatches(msg, m.keys.Browse.DeleteWord):
-			m.helpInput = deleteLastShellWord(m.helpInput)
-			m.clampHelpCursor()
+			m.setHelpInput(deleteLastShellWord(m.helpInput))
 		case keyMatches(msg, m.keys.Browse.ClearInput):
-			m.helpInput = ""
-			m.clampHelpCursor()
+			m.setHelpInput("")
 		default:
 			if len(msg.Runes) > 0 && !msg.Alt {
-				m.helpInput += string(msg.Runes)
-				m.clampHelpCursor()
+				m.setHelpInput(m.helpInput + string(msg.Runes))
 			}
 		}
 		return m, nil
@@ -694,18 +693,14 @@ func (m Model) updateCommandKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.runCommand(items[m.commandCursor].item)
 	case keyMatches(msg, m.keys.Browse.DeleteChar):
-		m.commandInput = deleteLastRune(m.commandInput)
-		m.clampCommandCursor()
+		m.setCommandInput(deleteLastRune(m.commandInput))
 	case keyMatches(msg, m.keys.Browse.DeleteWord):
-		m.commandInput = deleteLastShellWord(m.commandInput)
-		m.clampCommandCursor()
+		m.setCommandInput(deleteLastShellWord(m.commandInput))
 	case keyMatches(msg, m.keys.Browse.ClearInput):
-		m.commandInput = ""
-		m.clampCommandCursor()
+		m.setCommandInput("")
 	default:
 		if len(msg.Runes) > 0 && !msg.Alt {
-			m.commandInput += string(msg.Runes)
-			m.clampCommandCursor()
+			m.setCommandInput(m.commandInput + string(msg.Runes))
 		}
 	}
 	return m, nil
@@ -845,18 +840,14 @@ func (m Model) updateTemplateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keyMatches(msg, m.keys.Browse.JumpPreviousSection):
 		m.jumpTemplateSection(-1)
 	case keyMatches(msg, m.keys.Browse.DeleteChar):
-		m.templateFilter = deleteLastRune(m.templateFilter)
-		m.applyTemplateFilter()
+		m.setTemplateFilter(deleteLastRune(m.templateFilter))
 	case keyMatches(msg, m.keys.Browse.DeleteWord):
-		m.templateFilter = deleteLastShellWord(m.templateFilter)
-		m.applyTemplateFilter()
+		m.setTemplateFilter(deleteLastShellWord(m.templateFilter))
 	case keyMatches(msg, m.keys.Browse.ClearInput):
-		m.templateFilter = ""
-		m.applyTemplateFilter()
+		m.setTemplateFilter("")
 	default:
 		if len(msg.Runes) > 0 && !msg.Alt {
-			m.templateFilter += string(msg.Runes)
-			m.applyTemplateFilter()
+			m.setTemplateFilter(m.templateFilter + string(msg.Runes))
 		}
 	}
 	return m, nil
@@ -876,6 +867,7 @@ func (m *Model) closeTemplatePicker() {
 	m.templateFiltered = nil
 	m.templateCursor = 0
 	m.templateScroll = 0
+	m.templateRestore = 0
 	m.templatePreviousMode = modeBrowse
 }
 
@@ -926,6 +918,7 @@ func (m Model) openTemplatePickerForCandidate(selected candidate, previous mode)
 	m.templateFiltered = templatePickerItems(m.templateAvailable)
 	m.templateCursor = 0
 	m.templateScroll = 0
+	m.templateRestore = 0
 	m.applyTemplateFilter()
 	return m, nil
 }
@@ -2468,6 +2461,7 @@ func (m *Model) openCommands(previous mode) {
 	m.commandInput = ""
 	m.commandCursor = 0
 	m.commandScroll = 0
+	m.commandRestore = 0
 }
 
 func (m *Model) ensureCommandCursorVisible() {
@@ -2497,12 +2491,32 @@ func (m *Model) clampCommandCursor() {
 	m.ensureCommandCursorVisible()
 }
 
+func (m *Model) setCommandInput(input string) {
+	wasFiltering := hasPopupFilter(m.commandInput)
+	isFiltering := hasPopupFilter(input)
+	if !wasFiltering && isFiltering {
+		m.commandRestore = m.commandCursor
+	}
+	m.commandInput = input
+	if isFiltering {
+		m.commandCursor = 0
+		m.commandScroll = 0
+		return
+	}
+	if wasFiltering {
+		m.commandCursor = m.commandRestore
+		m.commandScroll = 0
+	}
+	m.clampCommandCursor()
+}
+
 func (m *Model) openHelp(previous mode) {
 	m.previousMode = previous
 	m.mode = modeHelp
 	m.helpCursor = 0
 	m.helpScroll = 0
 	m.helpInput = ""
+	m.helpRestore = 0
 }
 
 func (m *Model) ensureHelpCursorVisible() {
@@ -2530,6 +2544,29 @@ func (m *Model) clampHelpCursor() {
 		m.helpCursor = 0
 	}
 	m.ensureHelpCursorVisible()
+}
+
+func (m *Model) setHelpInput(input string) {
+	wasFiltering := hasPopupFilter(m.helpInput)
+	isFiltering := hasPopupFilter(input)
+	if !wasFiltering && isFiltering {
+		m.helpRestore = m.helpCursor
+	}
+	m.helpInput = input
+	if isFiltering {
+		m.helpCursor = 0
+		m.helpScroll = 0
+		return
+	}
+	if wasFiltering {
+		m.helpCursor = m.helpRestore
+		m.helpScroll = 0
+	}
+	m.clampHelpCursor()
+}
+
+func hasPopupFilter(input string) bool {
+	return strings.TrimSpace(input) != ""
 }
 
 func (m *Model) clearPathCompletion() {
@@ -4011,6 +4048,26 @@ func (m *Model) applyTemplateFilter() {
 		m.templateScroll = len(m.templateFiltered) - 1
 	}
 	m.ensureTemplateCursorVisible()
+}
+
+func (m *Model) setTemplateFilter(filter string) {
+	wasFiltering := hasPopupFilter(m.templateFilter)
+	isFiltering := hasPopupFilter(filter)
+	if !wasFiltering && isFiltering {
+		m.templateRestore = m.templateCursor
+	}
+	m.templateFilter = filter
+	m.applyTemplateFilter()
+	if isFiltering {
+		m.templateCursor = 0
+		m.templateScroll = 0
+		return
+	}
+	if wasFiltering {
+		m.templateCursor = clampIndex(m.templateRestore, len(m.templateFiltered))
+		m.templateScroll = 0
+		m.ensureTemplateCursorVisible()
+	}
 }
 
 func templatePickerItems(templates []sessionconfig.Template) []sessionconfig.Template {
