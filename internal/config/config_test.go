@@ -257,6 +257,19 @@ launch = ["ctrl+l"]
 	}
 }
 
+func TestLoadFileRejectsObsoletePopupNavigationKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeFile(t, path, `
+[ui.keys.commands]
+up = ["k"]
+`)
+
+	_, err := LoadFile(path)
+	if err == nil || !strings.Contains(err.Error(), "unknown key ui.keys.commands.up") {
+		t.Fatalf("LoadFile() err = %v, want obsolete popup key error", err)
+	}
+}
+
 func TestLoadFileReadsUIColumns(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	writeFile(t, path, `

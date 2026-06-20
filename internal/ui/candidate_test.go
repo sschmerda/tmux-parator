@@ -602,6 +602,40 @@ func TestHelpScrollAndPageKeys(t *testing.T) {
 	}
 }
 
+func TestCommandsAndHelpUseBrowseNavigationKeys(t *testing.T) {
+	keys := config.Default().UI.Keys
+	keys.Browse.Up = []string{"k"}
+	keys.Browse.Down = []string{"j"}
+	model := NewModelWithKeys(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{}, keys)
+
+	model.openCommands(modeBrowse)
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	model = updated.(Model)
+	if model.commandCursor != 1 {
+		t.Fatalf("command cursor = %d, want browse down key to move selection", model.commandCursor)
+	}
+
+	model.openHelp(modeBrowse)
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	model = updated.(Model)
+	if model.helpCursor != 1 {
+		t.Fatalf("help cursor = %d, want browse down key to move selection", model.helpCursor)
+	}
+}
+
+func TestHelpFuzzySearchesActionsKeysAndDescriptions(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.openHelp(modeBrowse)
+
+	for _, query := range []string{"kill selected", "c-k", "confirmation"} {
+		model.helpInput = query
+		matches := model.helpMatches()
+		if len(matches) == 0 || matches[0].item.Action != "Kill selected session" {
+			t.Fatalf("help query %q matches = %#v, want kill selected session", query, matches)
+		}
+	}
+}
+
 func TestBrowseCursorStaysRenderedWhenMovingBelowViewport(t *testing.T) {
 	model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
 	model.width = 100

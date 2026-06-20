@@ -61,7 +61,9 @@ Confirmation popups:
 
 ## Hotkeys
 
-Default bindings can be changed under `[ui.keys]` in `config.toml`.
+Default bindings can be changed under `[ui.keys]` in `config.toml`. Command,
+template, and help popups reuse navigation and prompt-editing bindings from
+`[ui.keys.browse]`; their own key sections contain only popup-specific actions.
 
 Main list:
 
@@ -135,10 +137,10 @@ their names match configured candidates.
 In the command palette:
 
 - Type to fuzzy-search commands.
-- `Up`/`Down` selects a command.
+- Navigation and prompt editing use `[ui.keys.browse]`.
 - `Enter` runs the selected command.
 - `Esc` or `Ctrl-g` closes the palette.
-- `?` opens help.
+- `Ctrl-?` opens help.
 - `Open last session` switches to tmux's last active session.
 - Toggle commands and `Quit` are available from the palette.
 

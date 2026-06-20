@@ -670,36 +670,36 @@ func (m Model) updateCommandKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = m.commandPreviousMode
 	case keyMatches(msg, m.keys.Commands.Help):
 		m.openHelp(m.mode)
-	case keyMatches(msg, m.keys.Commands.Up):
+	case keyMatches(msg, m.keys.Browse.Up):
 		if m.commandCursor > 0 {
 			m.commandCursor--
 			m.ensureCommandCursorVisible()
 		}
-	case keyMatches(msg, m.keys.Commands.Down):
+	case keyMatches(msg, m.keys.Browse.Down):
 		if m.commandCursor < len(items)-1 {
 			m.commandCursor++
 			m.ensureCommandCursorVisible()
 		}
-	case keyMatches(msg, m.keys.Commands.PageUp):
+	case keyMatches(msg, m.keys.Browse.PageUp):
 		m.moveCommandCursor(-halfPageStep(commandListHeightForFrame(panelDialogFrame(m.dialogs, m.innerWidth(), m.innerHeight()))))
-	case keyMatches(msg, m.keys.Commands.PageDown):
+	case keyMatches(msg, m.keys.Browse.PageDown):
 		m.moveCommandCursor(halfPageStep(commandListHeightForFrame(panelDialogFrame(m.dialogs, m.innerWidth(), m.innerHeight()))))
-	case keyMatches(msg, m.keys.Commands.ScrollUp):
+	case keyMatches(msg, m.keys.Browse.ScrollUp):
 		m.scrollCommandViewport(-1)
-	case keyMatches(msg, m.keys.Commands.ScrollDown):
+	case keyMatches(msg, m.keys.Browse.ScrollDown):
 		m.scrollCommandViewport(1)
 	case keyMatches(msg, m.keys.Commands.RunSelected):
 		if len(items) == 0 || m.commandCursor < 0 || m.commandCursor >= len(items) {
 			return m, nil
 		}
 		return m.runCommand(items[m.commandCursor].item)
-	case keyMatches(msg, m.keys.Commands.DeleteChar):
+	case keyMatches(msg, m.keys.Browse.DeleteChar):
 		m.commandInput = deleteLastRune(m.commandInput)
 		m.clampCommandCursor()
-	case keyMatches(msg, m.keys.Commands.DeleteWord):
+	case keyMatches(msg, m.keys.Browse.DeleteWord):
 		m.commandInput = deleteLastShellWord(m.commandInput)
 		m.clampCommandCursor()
-	case keyMatches(msg, m.keys.Commands.ClearInput):
+	case keyMatches(msg, m.keys.Browse.ClearInput):
 		m.commandInput = ""
 		m.clampCommandCursor()
 	default:

@@ -99,25 +99,10 @@ type CommandKeys struct {
 	Close       []string `toml:"close"`
 	Help        []string `toml:"help"`
 	RunSelected []string `toml:"run_selected"`
-	Up          []string `toml:"up"`
-	Down        []string `toml:"down"`
-	PageUp      []string `toml:"page_up"`
-	PageDown    []string `toml:"page_down"`
-	ScrollUp    []string `toml:"scroll_up"`
-	ScrollDown  []string `toml:"scroll_down"`
-	DeleteChar  []string `toml:"delete_char"`
-	DeleteWord  []string `toml:"delete_word"`
-	ClearInput  []string `toml:"clear_input"`
 }
 
 type HelpKeys struct {
-	Close      []string `toml:"close"`
-	Up         []string `toml:"up"`
-	Down       []string `toml:"down"`
-	PageUp     []string `toml:"page_up"`
-	PageDown   []string `toml:"page_down"`
-	ScrollUp   []string `toml:"scroll_up"`
-	ScrollDown []string `toml:"scroll_down"`
+	Close []string `toml:"close"`
 }
 
 type ConfirmKeys struct {
@@ -289,25 +274,10 @@ type rawCommandKeys struct {
 	Close       []string `toml:"close"`
 	Help        []string `toml:"help"`
 	RunSelected []string `toml:"run_selected"`
-	Up          []string `toml:"up"`
-	Down        []string `toml:"down"`
-	PageUp      []string `toml:"page_up"`
-	PageDown    []string `toml:"page_down"`
-	ScrollUp    []string `toml:"scroll_up"`
-	ScrollDown  []string `toml:"scroll_down"`
-	DeleteChar  []string `toml:"delete_char"`
-	DeleteWord  []string `toml:"delete_word"`
-	ClearInput  []string `toml:"clear_input"`
 }
 
 type rawHelpKeys struct {
-	Close      []string `toml:"close"`
-	Up         []string `toml:"up"`
-	Down       []string `toml:"down"`
-	PageUp     []string `toml:"page_up"`
-	PageDown   []string `toml:"page_down"`
-	ScrollUp   []string `toml:"scroll_up"`
-	ScrollDown []string `toml:"scroll_down"`
+	Close []string `toml:"close"`
 }
 
 type rawConfirmKeys struct {
@@ -618,27 +588,12 @@ func mergeCommandKeys(raw rawCommandKeys, fallback CommandKeys) CommandKeys {
 	keys.Close = mergeKeyList(raw.Close, keys.Close)
 	keys.Help = mergeKeyList(raw.Help, keys.Help)
 	keys.RunSelected = mergeKeyList(raw.RunSelected, keys.RunSelected)
-	keys.Up = mergeKeyList(raw.Up, keys.Up)
-	keys.Down = mergeKeyList(raw.Down, keys.Down)
-	keys.PageUp = mergeKeyList(raw.PageUp, keys.PageUp)
-	keys.PageDown = mergeKeyList(raw.PageDown, keys.PageDown)
-	keys.ScrollUp = mergeKeyList(raw.ScrollUp, keys.ScrollUp)
-	keys.ScrollDown = mergeKeyList(raw.ScrollDown, keys.ScrollDown)
-	keys.DeleteChar = mergeKeyList(raw.DeleteChar, keys.DeleteChar)
-	keys.DeleteWord = mergeKeyList(raw.DeleteWord, keys.DeleteWord)
-	keys.ClearInput = mergeKeyList(raw.ClearInput, keys.ClearInput)
 	return keys
 }
 
 func mergeHelpKeys(raw rawHelpKeys, fallback HelpKeys) HelpKeys {
 	keys := fallback
 	keys.Close = mergeKeyList(raw.Close, keys.Close)
-	keys.Up = mergeKeyList(raw.Up, keys.Up)
-	keys.Down = mergeKeyList(raw.Down, keys.Down)
-	keys.PageUp = mergeKeyList(raw.PageUp, keys.PageUp)
-	keys.PageDown = mergeKeyList(raw.PageDown, keys.PageDown)
-	keys.ScrollUp = mergeKeyList(raw.ScrollUp, keys.ScrollUp)
-	keys.ScrollDown = mergeKeyList(raw.ScrollDown, keys.ScrollDown)
 	return keys
 }
 
@@ -730,24 +685,9 @@ func defaultKeyBindings() KeyBindings {
 			Close:       []string{"esc", "ctrl+g"},
 			Help:        []string{"ctrl+_"},
 			RunSelected: []string{"enter"},
-			Up:          []string{"up"},
-			Down:        []string{"down"},
-			PageUp:      []string{"pgup", "ctrl+b"},
-			PageDown:    []string{"pgdown", "ctrl+d"},
-			ScrollUp:    []string{"ctrl+y"},
-			ScrollDown:  []string{"ctrl+e"},
-			DeleteChar:  []string{"backspace", "ctrl+h"},
-			DeleteWord:  []string{"alt+backspace"},
-			ClearInput:  []string{"ctrl+u", "meta+backspace"},
 		},
 		Help: HelpKeys{
-			Close:      []string{"esc", "ctrl+_"},
-			Up:         []string{"up", "k"},
-			Down:       []string{"down", "j"},
-			PageUp:     []string{"pgup", "ctrl+b"},
-			PageDown:   []string{"pgdown", "ctrl+d"},
-			ScrollUp:   []string{"ctrl+y"},
-			ScrollDown: []string{"ctrl+e"},
+			Close: []string{"esc", "ctrl+_"},
 		},
 		Confirm: ConfirmKeys{
 			Yes:    []string{"y", "Y"},
@@ -768,11 +708,15 @@ func rawPathSearchKeysFromKeys(keys PathSearchKeys) rawPathSearchKeys {
 }
 
 func rawCommandKeysFromKeys(keys CommandKeys) rawCommandKeys {
-	return rawCommandKeys(keys)
+	return rawCommandKeys{
+		Close:       keys.Close,
+		Help:        keys.Help,
+		RunSelected: keys.RunSelected,
+	}
 }
 
 func rawHelpKeysFromKeys(keys HelpKeys) rawHelpKeys {
-	return rawHelpKeys(keys)
+	return rawHelpKeys{Close: keys.Close}
 }
 
 func rawConfirmKeysFromKeys(keys ConfirmKeys) rawConfirmKeys {
@@ -1165,27 +1109,12 @@ func validateKeyBindings(keys KeyBindings) error {
 				{name: "close", keys: keys.Commands.Close},
 				{name: "help", keys: keys.Commands.Help},
 				{name: "run_selected", keys: keys.Commands.RunSelected},
-				{name: "up", keys: keys.Commands.Up},
-				{name: "down", keys: keys.Commands.Down},
-				{name: "page_up", keys: keys.Commands.PageUp},
-				{name: "page_down", keys: keys.Commands.PageDown},
-				{name: "scroll_up", keys: keys.Commands.ScrollUp},
-				{name: "scroll_down", keys: keys.Commands.ScrollDown},
-				{name: "delete_char", keys: keys.Commands.DeleteChar},
-				{name: "delete_word", keys: keys.Commands.DeleteWord},
-				{name: "clear_input", keys: keys.Commands.ClearInput},
 			},
 		},
 		{
 			name: "help",
 			actions: []keyAction{
 				{name: "close", keys: keys.Help.Close},
-				{name: "up", keys: keys.Help.Up},
-				{name: "down", keys: keys.Help.Down},
-				{name: "page_up", keys: keys.Help.PageUp},
-				{name: "page_down", keys: keys.Help.PageDown},
-				{name: "scroll_up", keys: keys.Help.ScrollUp},
-				{name: "scroll_down", keys: keys.Help.ScrollDown},
 			},
 		},
 		{
