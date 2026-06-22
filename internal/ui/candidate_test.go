@@ -709,6 +709,89 @@ func TestPopupFiltersSelectBestResultAndRestorePreviousCursor(t *testing.T) {
 	})
 }
 
+func TestPopupFilterSelectionTransitions(t *testing.T) {
+	tests := []struct {
+		name        string
+		previous    string
+		next        string
+		cursor      int
+		scroll      int
+		restore     int
+		total       int
+		wantCursor  int
+		wantScroll  int
+		wantRestore int
+	}{
+		{
+			name:        "starts filtering and saves cursor",
+			previous:    "",
+			next:        "repo",
+			cursor:      4,
+			scroll:      2,
+			total:       3,
+			wantCursor:  0,
+			wantScroll:  0,
+			wantRestore: 4,
+		},
+		{
+			name:        "changes filter and keeps saved cursor",
+			previous:    "repo",
+			next:        "repository",
+			cursor:      2,
+			scroll:      1,
+			restore:     4,
+			total:       2,
+			wantCursor:  0,
+			wantScroll:  0,
+			wantRestore: 4,
+		},
+		{
+			name:        "clears filter and restores cursor",
+			previous:    "repo",
+			next:        "",
+			restore:     4,
+			total:       8,
+			wantCursor:  4,
+			wantScroll:  0,
+			wantRestore: 4,
+		},
+		{
+			name:        "clamps restored cursor to available results",
+			previous:    "repo",
+			next:        "",
+			restore:     8,
+			total:       3,
+			wantCursor:  2,
+			wantScroll:  0,
+			wantRestore: 8,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cursor, scroll, restore := popupFilterSelection(
+				tt.previous,
+				tt.next,
+				tt.cursor,
+				tt.scroll,
+				tt.restore,
+				tt.total,
+			)
+			if cursor != tt.wantCursor || scroll != tt.wantScroll || restore != tt.wantRestore {
+				t.Fatalf(
+					"popupFilterSelection() = (%d,%d,%d), want (%d,%d,%d)",
+					cursor,
+					scroll,
+					restore,
+					tt.wantCursor,
+					tt.wantScroll,
+					tt.wantRestore,
+				)
+			}
+		})
+	}
+}
+
 func TestBrowseCursorStaysRenderedWhenMovingBelowViewport(t *testing.T) {
 	model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
 	model.width = 100

@@ -2475,39 +2475,18 @@ func (m *Model) ensureCommandCursorVisible() {
 	}
 }
 
-func (m *Model) clampCommandCursor() {
-	items := m.commandMatches()
-	if len(items) == 0 {
-		m.commandCursor = 0
-		m.commandScroll = 0
-		return
-	}
-	if m.commandCursor >= len(items) {
-		m.commandCursor = len(items) - 1
-	}
-	if m.commandCursor < 0 {
-		m.commandCursor = 0
-	}
-	m.ensureCommandCursorVisible()
-}
-
 func (m *Model) setCommandInput(input string) {
-	wasFiltering := hasPopupFilter(m.commandInput)
-	isFiltering := hasPopupFilter(input)
-	if !wasFiltering && isFiltering {
-		m.commandRestore = m.commandCursor
-	}
+	previous := m.commandInput
 	m.commandInput = input
-	if isFiltering {
-		m.commandCursor = 0
-		m.commandScroll = 0
-		return
-	}
-	if wasFiltering {
-		m.commandCursor = m.commandRestore
-		m.commandScroll = 0
-	}
-	m.clampCommandCursor()
+	m.commandCursor, m.commandScroll, m.commandRestore = popupFilterSelection(
+		previous,
+		input,
+		m.commandCursor,
+		m.commandScroll,
+		m.commandRestore,
+		len(m.commandMatches()),
+	)
+	m.ensureCommandCursorVisible()
 }
 
 func (m *Model) openHelp(previous mode) {
@@ -2530,43 +2509,33 @@ func (m *Model) ensureHelpCursorVisible() {
 	}
 }
 
-func (m *Model) clampHelpCursor() {
-	items := m.helpMatches()
-	if len(items) == 0 {
-		m.helpCursor = 0
-		m.helpScroll = 0
-		return
-	}
-	if m.helpCursor >= len(items) {
-		m.helpCursor = len(items) - 1
-	}
-	if m.helpCursor < 0 {
-		m.helpCursor = 0
-	}
+func (m *Model) setHelpInput(input string) {
+	previous := m.helpInput
+	m.helpInput = input
+	m.helpCursor, m.helpScroll, m.helpRestore = popupFilterSelection(
+		previous,
+		input,
+		m.helpCursor,
+		m.helpScroll,
+		m.helpRestore,
+		len(m.helpMatches()),
+	)
 	m.ensureHelpCursorVisible()
 }
 
-func (m *Model) setHelpInput(input string) {
-	wasFiltering := hasPopupFilter(m.helpInput)
-	isFiltering := hasPopupFilter(input)
+func popupFilterSelection(previous string, next string, cursor int, scroll int, restore int, total int) (int, int, int) {
+	wasFiltering := strings.TrimSpace(previous) != ""
+	isFiltering := strings.TrimSpace(next) != ""
 	if !wasFiltering && isFiltering {
-		m.helpRestore = m.helpCursor
+		restore = cursor
 	}
-	m.helpInput = input
 	if isFiltering {
-		m.helpCursor = 0
-		m.helpScroll = 0
-		return
+		return 0, 0, restore
 	}
 	if wasFiltering {
-		m.helpCursor = m.helpRestore
-		m.helpScroll = 0
+		return clampIndex(restore, total), 0, restore
 	}
-	m.clampHelpCursor()
-}
-
-func hasPopupFilter(input string) bool {
-	return strings.TrimSpace(input) != ""
+	return clampIndex(cursor, total), clampIndex(scroll, total), restore
 }
 
 func (m *Model) clearPathCompletion() {
@@ -4051,23 +4020,20 @@ func (m *Model) applyTemplateFilter() {
 }
 
 func (m *Model) setTemplateFilter(filter string) {
-	wasFiltering := hasPopupFilter(m.templateFilter)
-	isFiltering := hasPopupFilter(filter)
-	if !wasFiltering && isFiltering {
-		m.templateRestore = m.templateCursor
-	}
+	previous := m.templateFilter
+	cursor := m.templateCursor
+	scroll := m.templateScroll
 	m.templateFilter = filter
 	m.applyTemplateFilter()
-	if isFiltering {
-		m.templateCursor = 0
-		m.templateScroll = 0
-		return
-	}
-	if wasFiltering {
-		m.templateCursor = clampIndex(m.templateRestore, len(m.templateFiltered))
-		m.templateScroll = 0
-		m.ensureTemplateCursorVisible()
-	}
+	m.templateCursor, m.templateScroll, m.templateRestore = popupFilterSelection(
+		previous,
+		filter,
+		cursor,
+		scroll,
+		m.templateRestore,
+		len(m.templateFiltered),
+	)
+	m.ensureTemplateCursorVisible()
 }
 
 func templatePickerItems(templates []sessionconfig.Template) []sessionconfig.Template {
