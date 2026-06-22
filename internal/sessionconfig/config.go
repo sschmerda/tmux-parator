@@ -18,16 +18,26 @@ type Config struct {
 type Template struct {
 	ID                string
 	Name              string
+	SessionName       string
 	Focus             string
 	Description       string
 	Chip              string
 	WindowIndicators  []string
+	Variables         map[string]string
+	Parameters        []Parameter
 	Enabled           bool
 	Source            string
 	Match             []string
 	BeforeCreateHooks []Hook
 	AfterCreateHooks  []Hook
 	Windows           []Window
+}
+
+type Parameter struct {
+	Name    string
+	Prompt  string
+	Options []string
+	Default string
 }
 
 type Hook struct {
@@ -60,17 +70,27 @@ const (
 )
 
 type rawTemplate struct {
-	ID               string      `toml:"id"`
-	Name             string      `toml:"name"`
-	Focus            string      `toml:"focus"`
-	Description      string      `toml:"description"`
-	Chip             string      `toml:"chip"`
-	WindowIndicators interface{} `toml:"window_indicators"`
-	Glyphs           interface{} `toml:"glyphs"`
-	Enabled          *bool       `toml:"enabled"`
-	Match            interface{} `toml:"match"`
-	Hooks            rawHooks    `toml:"hooks"`
-	Windows          []rawWindow `toml:"windows"`
+	ID               string            `toml:"id"`
+	Name             string            `toml:"name"`
+	SessionName      string            `toml:"session_name"`
+	Focus            string            `toml:"focus"`
+	Description      string            `toml:"description"`
+	Chip             string            `toml:"chip"`
+	WindowIndicators interface{}       `toml:"window_indicators"`
+	Glyphs           interface{}       `toml:"glyphs"`
+	Variables        map[string]string `toml:"variables"`
+	Parameters       []rawParameter    `toml:"parameters"`
+	Enabled          *bool             `toml:"enabled"`
+	Match            interface{}       `toml:"match"`
+	Hooks            rawHooks          `toml:"hooks"`
+	Windows          []rawWindow       `toml:"windows"`
+}
+
+type rawParameter struct {
+	Name    string   `toml:"name"`
+	Prompt  string   `toml:"prompt"`
+	Options []string `toml:"options"`
+	Default string   `toml:"default"`
 }
 
 type rawHooks struct {
@@ -253,11 +273,14 @@ func appendTemplates(cfg *Config, ids map[string]bool, names map[string]bool, ma
 func rawTemplateEmpty(template rawTemplate) bool {
 	return strings.TrimSpace(template.ID) == "" &&
 		strings.TrimSpace(template.Name) == "" &&
+		strings.TrimSpace(template.SessionName) == "" &&
 		strings.TrimSpace(template.Focus) == "" &&
 		strings.TrimSpace(template.Description) == "" &&
 		strings.TrimSpace(template.Chip) == "" &&
 		template.WindowIndicators == nil &&
 		template.Glyphs == nil &&
+		len(template.Variables) == 0 &&
+		len(template.Parameters) == 0 &&
 		template.Enabled == nil &&
 		template.Match == nil &&
 		len(template.Hooks.BeforeCreateCommand) == 0 &&
@@ -310,16 +333,22 @@ func normalizeTemplate(raw rawTemplate, configDir string) (Template, error) {
 	template := Template{
 		ID:                strings.TrimSpace(raw.ID),
 		Name:              strings.TrimSpace(raw.Name),
+		SessionName:       strings.TrimSpace(raw.SessionName),
 		Focus:             strings.TrimSpace(raw.Focus),
 		Description:       strings.TrimSpace(raw.Description),
 		Chip:              strings.TrimSpace(raw.Chip),
 		WindowIndicators:  windowIndicators,
+		Variables:         cloneVariables(raw.Variables),
 		Enabled:           true,
 		Source:            SourceGlobal,
 		Match:             match,
 		BeforeCreateHooks: beforeCreateHooks,
 		AfterCreateHooks:  afterCreateHooks,
 		Windows:           make([]Window, 0, len(raw.Windows)),
+	}
+	template.Parameters, err = normalizeParameters(raw.Parameters, template.Variables)
+	if err != nil {
+		return Template{}, err
 	}
 	if raw.Enabled != nil {
 		template.Enabled = *raw.Enabled
@@ -348,10 +377,71 @@ func normalizeTemplate(raw rawTemplate, configDir string) (Template, error) {
 	if template.Focus == "" {
 		return Template{}, fmt.Errorf("focus is required")
 	}
-	if !templateFocusResolves(template.Focus, template.Windows) {
+	if !templateContainsStructuralInterpolation(template) && !templateFocusResolves(template.Focus, template.Windows) {
 		return Template{}, fmt.Errorf("focus %q does not resolve to a pane", template.Focus)
 	}
 	return template, nil
+}
+
+func normalizeParameters(rawParameters []rawParameter, variables map[string]string) ([]Parameter, error) {
+	parameters := make([]Parameter, 0, len(rawParameters))
+	names := make(map[string]bool, len(rawParameters))
+	for i, raw := range rawParameters {
+		name := strings.TrimSpace(raw.Name)
+		if !variableNamePattern.MatchString(name) {
+			return nil, fmt.Errorf("parameter %d: name %q is invalid", i+1, name)
+		}
+		if isBuiltinVariable(name) {
+			return nil, fmt.Errorf("parameter %q: name is reserved", name)
+		}
+		if _, exists := variables[name]; exists {
+			return nil, fmt.Errorf("parameter %q: name conflicts with variables", name)
+		}
+		if names[name] {
+			return nil, fmt.Errorf("parameter %q: duplicate name", name)
+		}
+		prompt := strings.TrimSpace(raw.Prompt)
+		if prompt == "" {
+			return nil, fmt.Errorf("parameter %q: prompt is required", name)
+		}
+		if len(raw.Options) == 0 {
+			return nil, fmt.Errorf("parameter %q: options are required", name)
+		}
+		options := make([]string, 0, len(raw.Options))
+		optionSet := make(map[string]bool, len(raw.Options))
+		for _, rawOption := range raw.Options {
+			option := strings.TrimSpace(rawOption)
+			if option == "" {
+				return nil, fmt.Errorf("parameter %q: options must not contain empty values", name)
+			}
+			if optionSet[option] {
+				return nil, fmt.Errorf("parameter %q: duplicate option %q", name, option)
+			}
+			optionSet[option] = true
+			options = append(options, option)
+		}
+		defaultValue := strings.TrimSpace(raw.Default)
+		if defaultValue == "" {
+			defaultValue = options[0]
+		}
+		if !optionSet[defaultValue] {
+			return nil, fmt.Errorf("parameter %q: default %q is not in options", name, defaultValue)
+		}
+		names[name] = true
+		parameters = append(parameters, Parameter{Name: name, Prompt: prompt, Options: options, Default: defaultValue})
+	}
+	return parameters, nil
+}
+
+func cloneVariables(variables map[string]string) map[string]string {
+	if len(variables) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(variables))
+	for name, value := range variables {
+		result[strings.TrimSpace(name)] = value
+	}
+	return result
 }
 
 func normalizeHooks(rawHooks []rawHook, scripts bool, configDir string, field string) ([]Hook, error) {
@@ -397,7 +487,7 @@ func normalizeWindow(raw rawWindow, configDir string) (Window, error) {
 		Focus:  strings.TrimSpace(raw.Focus),
 		Layout: layout,
 	}
-	if window.Focus != "" && !focusResolves(window.Focus, window.Layout) {
+	if window.Focus != "" && !containsInterpolation(window.Focus) && !nodeContainsInterpolation(window.Layout) && !focusResolves(window.Focus, window.Layout) {
 		return Window{}, fmt.Errorf("focus %q does not resolve to a pane", window.Focus)
 	}
 	return window, nil

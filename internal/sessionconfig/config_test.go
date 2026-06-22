@@ -98,6 +98,104 @@ type = "pane"
 	}
 }
 
+func TestLoadFileAllowsInterpolatedStructuralNames(t *testing.T) {
+	path := writeTemplateConfig(t, `
+id = "dynamic"
+name = "Dynamic"
+session_name = "{workspace_name}-dev"
+focus = "{window_name}.{pane_name}"
+
+[variables]
+window_name = "{session_name}-work"
+pane_name = "editor"
+
+[[windows]]
+name = "{window_name}"
+focus = "{pane_name}"
+
+[windows.layout]
+type = "pane"
+name = "{pane_name}"
+command = "nvim {workspace_path}"
+`)
+
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile() error = %v", err)
+	}
+	template := cfg.Templates[0]
+	if template.Variables["window_name"] != "{session_name}-work" {
+		t.Fatalf("window_name variable = %q", template.Variables["window_name"])
+	}
+	if template.SessionName != "{workspace_name}-dev" {
+		t.Fatalf("session_name = %q", template.SessionName)
+	}
+	rendered, err := Render(template, RenderContext{SessionName: "aoc", WorkspacePath: "/tmp/aoc"})
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	if rendered.Focus != "aoc-work.editor" || rendered.Windows[0].Name != "aoc-work" {
+		t.Fatalf("rendered focus/window = %q/%q", rendered.Focus, rendered.Windows[0].Name)
+	}
+}
+
+func TestLoadFileParsesTemplateParameters(t *testing.T) {
+	path := writeTemplateConfig(t, `
+id = "parameterized"
+name = "Parameterized"
+focus = "work.monitor"
+
+[[parameters]]
+name = "monitor"
+prompt = "System monitor"
+options = ["btop", "htop"]
+default = "btop"
+
+[[windows]]
+name = "work"
+
+[windows.layout]
+type = "pane"
+name = "monitor"
+command = "{monitor}"
+`)
+
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile() error = %v", err)
+	}
+	parameter := cfg.Templates[0].Parameters[0]
+	if parameter.Name != "monitor" || parameter.Prompt != "System monitor" || parameter.Default != "btop" {
+		t.Fatalf("parameter = %#v", parameter)
+	}
+}
+
+func TestLoadFileRejectsParameterDefaultOutsideOptions(t *testing.T) {
+	path := writeTemplateConfig(t, `
+id = "bad-parameter"
+name = "Bad Parameter"
+focus = "work.monitor"
+
+[[parameters]]
+name = "monitor"
+prompt = "System monitor"
+options = ["btop", "htop"]
+default = "top"
+
+[[windows]]
+name = "work"
+
+[windows.layout]
+type = "pane"
+name = "monitor"
+`)
+
+	_, err := LoadFile(path)
+	if err == nil || !strings.Contains(err.Error(), `default "top" is not in options`) {
+		t.Fatalf("LoadFile() error = %v, want invalid default error", err)
+	}
+}
+
 func TestLoadFileAcceptsLegacyGlyphsAsWindowIndicators(t *testing.T) {
 	path := writeTemplateConfig(t, `
 id = "legacy"
