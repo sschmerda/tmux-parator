@@ -2028,6 +2028,7 @@ type fakeSessionClient struct {
 	templateSessionPath string
 	templateMetadata    tmux.SessionMetadata
 	templateID          string
+	templateVariables   map[string]string
 	taggedSession       string
 	taggedMetadata      tmux.SessionMetadata
 }
@@ -2070,6 +2071,15 @@ func (f *fakeSessionClient) NewSessionWithLayout(_ context.Context, name string,
 	f.templateSessionPath = path
 	f.templateMetadata = metadata
 	f.templateID = template.ID
+	f.templateVariables = template.Variables
+	return nil
+}
+
+func (f *fakeSessionClient) NewSessionWithLayoutAndSwitch(ctx context.Context, name string, path string, metadata tmux.SessionMetadata, template sessionconfig.Template) error {
+	if err := f.NewSessionWithLayout(ctx, name, path, metadata, template); err != nil {
+		return err
+	}
+	f.switchedSession = name
 	return nil
 }
 
@@ -2789,6 +2799,94 @@ func TestAvailableSessionNameUsesLeafAndNumberedSuffix(t *testing.T) {
 	}
 }
 
+func TestAvailableTemplateSessionNameInterpolatesSanitizesAndNumbers(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.sessions = []tmux.Session{{Name: "aoc_dev"}}
+	template := sessionconfig.Template{
+		Name:        "Development",
+		SessionName: "{workspace_name} dev",
+	}
+
+	name, baseName, err := model.availableTemplateSessionName(
+		template,
+		"fallback",
+		"/tmp/repos/aoc",
+		tmux.SessionMetadata{Kind: "repo"},
+	)
+	if err != nil {
+		t.Fatalf("availableTemplateSessionName() error = %v", err)
+	}
+	if name != "aoc_dev_2" || baseName != "aoc_dev" {
+		t.Fatalf("name/baseName = %q/%q, want aoc_dev_2/aoc_dev", name, baseName)
+	}
+}
+
+func TestTemplateParametersStartAtDefaultAndResolveSelection(t *testing.T) {
+	client := &fakeSessionClient{}
+	model := NewModel(client, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	template := testTemplate("monitor", "Monitor")
+	template.Parameters = []sessionconfig.Parameter{{
+		Name:    "monitor",
+		Prompt:  "System monitor",
+		Options: []string{"htop", "btop"},
+		Default: "btop",
+	}}
+
+	updated, cmd := model.beginTemplateCreation(template, "repo", "/tmp/repo", tmux.SessionMetadata{Kind: "repo"}, modeBrowse)
+	model = updated.(Model)
+	if cmd != nil || model.mode != modeTemplateParameter || model.parameterCursor != 1 {
+		t.Fatalf("parameter state = mode %v cursor %d cmd %#v, want parameter cursor 1 and nil cmd", model.mode, model.parameterCursor, cmd)
+	}
+
+	updated, cmd = model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("parameter enter returned nil command")
+	}
+	if msg := cmd(); msg.(createdMsg).err != nil {
+		t.Fatalf("createdMsg error = %v", msg.(createdMsg).err)
+	}
+	if client.templateVariables["monitor"] != "btop" {
+		t.Fatalf("selected monitor = %q, want btop", client.templateVariables["monitor"])
+	}
+}
+
+func TestSuccessfulTemplateCreationQuitsWithoutSecondSwitch(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+
+	updated, cmd := model.Update(createdMsg{name: "repo", switched: true})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("successful switched template creation returned nil command")
+	}
+	msg := cmd()
+	if _, ok := msg.(tea.QuitMsg); !ok {
+		t.Fatalf("command message = %#v, want tea.QuitMsg", msg)
+	}
+}
+
+func TestTemplateParametersAdvanceAndCanBeCancelled(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	template := testTemplate("tools", "Tools")
+	template.Parameters = []sessionconfig.Parameter{
+		{Name: "monitor", Prompt: "Monitor", Options: []string{"btop", "htop"}, Default: "btop"},
+		{Name: "agent", Prompt: "Agent", Options: []string{"codex", "claude"}, Default: "codex"},
+	}
+
+	updated, _ := model.beginTemplateCreation(template, "repo", "/tmp/repo", tmux.SessionMetadata{}, modeBrowse)
+	model = updated.(Model)
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd != nil || model.parameterIndex != 1 || model.parameterCursor != 0 {
+		t.Fatalf("parameter state = index %d cursor %d cmd %#v, want second parameter default", model.parameterIndex, model.parameterCursor, cmd)
+	}
+	updated, cmd = model.updateKey(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+	if cmd != nil || model.mode != modeBrowse || len(model.parameterTemplate.Parameters) != 0 {
+		t.Fatalf("cancel state = mode %v template %#v cmd %#v", model.mode, model.parameterTemplate, cmd)
+	}
+}
+
 func TestOpenCandidateCreatesDuplicateWithNumberedLeafName(t *testing.T) {
 	client := &fakeSessionClient{}
 	model := NewModel(client, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{Manual: "M"}, config.GlyphColors{}, config.Columns{})
@@ -3020,6 +3118,41 @@ func TestBrowseEnterUsesFirstMatchingTemplate(t *testing.T) {
 	}
 	if model.mode != modeBrowse || !model.loading {
 		t.Fatalf("mode/loading = %v/%v, want browse/loading", model.mode, model.loading)
+	}
+}
+
+func TestBrowseEnterUsesTemplateSessionName(t *testing.T) {
+	client := &fakeSessionClient{}
+	template := templateWithMatch("repo", "Repository", "/tmp/repos/*")
+	template.SessionName = "{workspace_name}-dev"
+	model := NewModelWithTemplates(
+		client,
+		theme.Default(),
+		nil,
+		discovery.Options{},
+		config.PathSearch{},
+		config.Glyphs{},
+		config.GlyphColors{},
+		config.Columns{},
+		config.Default().UI.Keys,
+		[]sessionconfig.Template{template},
+	)
+	model.sessions = []tmux.Session{{Name: "repo-dev"}}
+	selected := candidate{kind: candidateRoot, root: discovery.Candidate{Name: "repo", Path: "/tmp/repos/repo", Mode: "repo"}}
+
+	updated, cmd := model.openCandidate(selected)
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("browse enter returned nil command")
+	}
+	if msg := cmd(); msg.(createdMsg).err != nil {
+		t.Fatalf("createdMsg error = %v", msg.(createdMsg).err)
+	}
+	if client.templateSessionName != "repo-dev_2" {
+		t.Fatalf("template session name = %q, want repo-dev_2", client.templateSessionName)
+	}
+	if client.templateMetadata.BaseName != "repo-dev" {
+		t.Fatalf("template base name = %q, want repo-dev", client.templateMetadata.BaseName)
 	}
 }
 

@@ -32,6 +32,7 @@ type sessionClient interface {
 	RenameSession(context.Context, string, string) error
 	NewSession(context.Context, string, string, tmux.SessionMetadata) error
 	NewSessionWithLayout(context.Context, string, string, tmux.SessionMetadata, sessionconfig.Template) error
+	NewSessionWithLayoutAndSwitch(context.Context, string, string, tmux.SessionMetadata, sessionconfig.Template) error
 	TagSession(context.Context, string, tmux.SessionMetadata) error
 }
 
@@ -47,6 +48,7 @@ const (
 	modePathSearch
 	modeConfirmCreatePath
 	modeTemplatePicker
+	modeTemplateParameter
 )
 
 type confirmChoice int
@@ -57,82 +59,90 @@ const (
 )
 
 type Model struct {
-	client               sessionClient
-	roots                []config.Root
-	discovery            discovery.Options
-	pathConfig           pathsearchConfig
-	glyphs               config.Glyphs
-	glyphColors          config.GlyphColors
-	columns              config.Columns
-	dialogs              config.Dialogs
-	keys                 config.KeyBindings
-	templates            []sessionconfig.Template
-	matchingTemplates    []sessionconfig.Template
-	sessions             []tmux.Session
-	rootItems            []discovery.Candidate
-	candidates           []candidate
-	filtered             []candidate
-	pathItems            []candidate
-	pathResult           []candidate
-	pathCompletions      []candidate
-	filter               string
-	commandInput         string
-	pathInput            string
-	pathRoot             string
-	createPathInput      string
-	createText           string
-	createPath           string
-	createMetadata       tmux.SessionMetadata
-	templatePath         string
-	templateMetadata     tmux.SessionMetadata
-	templateName         string
-	templateAvailable    []sessionconfig.Template
-	templateFilter       string
-	templateFiltered     []sessionconfig.Template
-	pendingTemplateName  string
-	pendingTemplatePath  string
-	pendingTemplateMeta  tmux.SessionMetadata
-	pendingTemplate      sessionconfig.Template
-	renameText           string
-	renameOriginal       string
-	cursor               int
-	scroll               int
-	filterRestoreCursor  int
-	filterRestoreScroll  int
-	filterRestoreActive  bool
-	pathCursor           int
-	pathScroll           int
-	helpCursor           int
-	helpScroll           int
-	helpInput            string
-	helpRestore          int
-	commandCursor        int
-	commandScroll        int
-	commandRestore       int
-	templateCursor       int
-	templateScroll       int
-	templateRestore      int
-	confirmChoice        confirmChoice
-	pathCompletionCursor int
-	pathCompletionInput  string
-	pathCompletionRoot   string
-	pathCompletionQuery  string
-	pathStream           <-chan pathsearch.Batch
-	pathCancel           context.CancelFunc
-	width                int
-	height               int
-	err                  error
-	rootErr              error
-	pathErr              error
-	notice               error
-	pathNotice           error
-	mode                 mode
-	previousMode         mode
-	commandPreviousMode  mode
-	templatePreviousMode mode
-	loading              bool
-	pathBusy             bool
-	styles               styles
+	client                sessionClient
+	roots                 []config.Root
+	discovery             discovery.Options
+	pathConfig            pathsearchConfig
+	glyphs                config.Glyphs
+	glyphColors           config.GlyphColors
+	columns               config.Columns
+	dialogs               config.Dialogs
+	keys                  config.KeyBindings
+	templates             []sessionconfig.Template
+	matchingTemplates     []sessionconfig.Template
+	sessions              []tmux.Session
+	rootItems             []discovery.Candidate
+	candidates            []candidate
+	filtered              []candidate
+	pathItems             []candidate
+	pathResult            []candidate
+	pathCompletions       []candidate
+	filter                string
+	commandInput          string
+	pathInput             string
+	pathRoot              string
+	createPathInput       string
+	createText            string
+	createPath            string
+	createMetadata        tmux.SessionMetadata
+	templatePath          string
+	templateMetadata      tmux.SessionMetadata
+	templateName          string
+	templateAvailable     []sessionconfig.Template
+	templateFilter        string
+	templateFiltered      []sessionconfig.Template
+	pendingTemplateName   string
+	pendingTemplatePath   string
+	pendingTemplateMeta   tmux.SessionMetadata
+	pendingTemplate       sessionconfig.Template
+	renameText            string
+	renameOriginal        string
+	cursor                int
+	scroll                int
+	filterRestoreCursor   int
+	filterRestoreScroll   int
+	filterRestoreActive   bool
+	pathCursor            int
+	pathScroll            int
+	helpCursor            int
+	helpScroll            int
+	helpInput             string
+	helpRestore           int
+	commandCursor         int
+	commandScroll         int
+	commandRestore        int
+	templateCursor        int
+	templateScroll        int
+	templateRestore       int
+	parameterTemplate     sessionconfig.Template
+	parameterPath         string
+	parameterFallback     string
+	parameterMetadata     tmux.SessionMetadata
+	parameterValues       map[string]string
+	parameterIndex        int
+	parameterCursor       int
+	parameterPreviousMode mode
+	confirmChoice         confirmChoice
+	pathCompletionCursor  int
+	pathCompletionInput   string
+	pathCompletionRoot    string
+	pathCompletionQuery   string
+	pathStream            <-chan pathsearch.Batch
+	pathCancel            context.CancelFunc
+	width                 int
+	height                int
+	err                   error
+	rootErr               error
+	pathErr               error
+	notice                error
+	pathNotice            error
+	mode                  mode
+	previousMode          mode
+	commandPreviousMode   mode
+	templatePreviousMode  mode
+	loading               bool
+	pathBusy              bool
+	styles                styles
 }
 
 const noTemplatePickerName = "No template"
@@ -173,8 +183,9 @@ type renamedMsg struct {
 }
 
 type createdMsg struct {
-	name string
-	err  error
+	name     string
+	switched bool
+	err      error
 }
 
 type rootsLoadedMsg struct {
@@ -402,6 +413,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if msg.switched {
+			return m, tea.Quit
+		}
 		return m, tea.Batch(m.loadSessions(), m.switchSession(msg.name))
 	case rootsLoadedMsg:
 		m.loading = false
@@ -474,13 +488,12 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if keyMatches(msg, m.keys.Browse.OpenSelected) || keyMatches(msg, dismissKeys(m.keys.Browse.Quit)) {
 			m.notice = nil
 			if keyMatches(msg, m.keys.Browse.OpenSelected) && strings.TrimSpace(m.pendingTemplatePath) != "" {
-				name := m.pendingTemplateName
+				fallbackName := m.pendingTemplateName
 				path := m.pendingTemplatePath
 				metadata := m.pendingTemplateMeta
 				template := m.pendingTemplate
 				m.clearPendingTemplate()
-				m.loading = true
-				return m, m.createSessionWithTemplate(name, path, metadata, template)
+				return m.beginTemplateCreation(template, fallbackName, path, metadata, modeBrowse)
 			}
 			m.clearPendingTemplate()
 		}
@@ -564,6 +577,9 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.mode == modeTemplatePicker {
 		return m.updateTemplateKey(msg)
+	}
+	if m.mode == modeTemplateParameter {
+		return m.updateTemplateParameterKey(msg)
 	}
 	if m.mode == modeConfirmKill {
 		switch {
@@ -802,21 +818,22 @@ func (m Model) updateTemplateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		template := items[m.templateCursor]
-		name := m.availableSessionName(m.templateName)
 		metadata := m.templateMetadata
-		metadata.BaseName = m.templateName
 		path := m.templatePath
+		fallbackName := m.templateName
 		previous := m.templatePreviousMode
-		m.loading = true
 		m.closeTemplatePicker()
-		if previous == modePathSearch {
-			m.stopPathStream()
-			m.mode = modeBrowse
-		}
 		if isNoTemplatePickerItem(template) {
+			m.loading = true
+			if previous == modePathSearch {
+				m.stopPathStream()
+				m.mode = modeBrowse
+			}
+			name := m.availableSessionName(fallbackName)
+			metadata.BaseName = fallbackName
 			return m, m.createSessionWithMetadata(name, path, metadata)
 		}
-		return m, m.createSessionWithTemplate(name, path, metadata, template)
+		return m.beginTemplateCreation(template, fallbackName, path, metadata, previous)
 	case keyMatches(msg, m.keys.Browse.Up):
 		if m.templateCursor > 0 {
 			m.templateCursor--
@@ -1289,6 +1306,11 @@ func (m Model) renderWithOverlay(content string) string {
 	}
 	if m.mode == modeTemplatePicker {
 		base = placeOverlay(base, renderTemplatePicker(m.styles, m.dialogs, m.keys, m.templateFiltered, m.templateFilter, m.templateCursor, m.templateScroll, innerWidth, innerHeight), innerWidth, innerHeight)
+	}
+	if m.mode == modeTemplateParameter {
+		if parameter, ok := m.currentTemplateParameter(); ok {
+			base = placeOverlay(base, renderTemplateParameterPicker(m.styles, m.dialogs, parameter, m.parameterIndex, len(m.parameterTemplate.Parameters), m.parameterCursor, innerWidth, innerHeight), innerWidth, innerHeight)
+		}
 	}
 	if m.mode == modeCommands || (m.mode == modeHelp && m.previousMode == modeCommands) {
 		base = placeOverlay(base, renderCommandPalette(m.styles, m.dialogs, m.commandMatches(), m.commandInput, m.commandCursor, m.commandScroll, innerWidth, innerHeight), innerWidth, innerHeight)
@@ -2452,6 +2474,9 @@ func (m Model) showsPathSearchBase() bool {
 	if m.mode == modeConfirmCreatePath {
 		return true
 	}
+	if m.mode == modeTemplateParameter && m.parameterPreviousMode == modePathSearch {
+		return true
+	}
 	return m.mode == modeHelp && ((m.previousMode == modePathSearch) || (m.previousMode == modeCommands && m.commandPreviousMode == modePathSearch))
 }
 
@@ -2648,7 +2673,7 @@ func (m Model) createSessionWithMetadata(name string, path string, metadata tmux
 
 func (m Model) createSessionWithTemplate(name string, path string, metadata tmux.SessionMetadata, template sessionconfig.Template) tea.Cmd {
 	return func() tea.Msg {
-		return createdMsg{name: name, err: m.client.NewSessionWithLayout(context.Background(), name, path, metadata, template)}
+		return createdMsg{name: name, switched: true, err: m.client.NewSessionWithLayoutAndSwitch(context.Background(), name, path, metadata, template)}
 	}
 }
 
@@ -2748,9 +2773,7 @@ func (m Model) openCandidate(selected candidate) (tea.Model, tea.Cmd) {
 		if session, ok := m.sessionForPath(selected.path()); ok {
 			return m, m.tagAndSwitchSession(session.Name, selected.sessionMetadata())
 		}
-		name := m.availableSessionName(selected.sessionName())
 		metadata := selected.sessionMetadata()
-		metadata.BaseName = selected.sessionName()
 		if selected.kind == candidatePath && metadata.Glyph == "" {
 			metadata.Glyph = m.glyphs.Path
 		}
@@ -2761,7 +2784,7 @@ func (m Model) openCandidate(selected candidate) (tea.Model, tea.Cmd) {
 			m.notice = err
 			return m, nil
 		} else if ok {
-			m.pendingTemplateName = name
+			m.pendingTemplateName = selected.sessionName()
 			m.pendingTemplatePath = selected.path()
 			m.pendingTemplateMeta = metadata
 			m.pendingTemplate = template
@@ -2769,8 +2792,10 @@ func (m Model) openCandidate(selected candidate) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if template, ok := sessionconfig.MatchingTemplate(m.matchingTemplates, selected.path()); ok {
-			return m, m.createSessionWithTemplate(name, selected.path(), metadata, template)
+			return m.beginTemplateCreation(template, selected.sessionName(), selected.path(), metadata, modeBrowse)
 		}
+		name := m.availableSessionName(selected.sessionName())
+		metadata.BaseName = selected.sessionName()
 		return m, m.createSessionWithMetadata(name, selected.path(), metadata)
 	}
 	return m, m.switchSession(selected.session.Name)
@@ -2815,6 +2840,153 @@ func (m Model) availableSessionName(base string) string {
 			return name
 		}
 	}
+}
+
+func (m Model) availableTemplateSessionName(template sessionconfig.Template, fallback string, path string, metadata tmux.SessionMetadata) (string, string, error) {
+	base, err := sessionconfig.ResolveSessionName(template, sessionconfig.RenderContext{
+		WorkspacePath: path,
+		RepoRoot:      metadata.Root,
+		SessionKind:   metadata.Kind,
+	})
+	if err != nil {
+		return "", "", err
+	}
+	if strings.TrimSpace(base) == "" {
+		base = fallback
+	}
+	base = sanitizeSessionName(base)
+	return m.availableSessionName(base), base, nil
+}
+
+func (m Model) beginTemplateCreation(template sessionconfig.Template, fallback string, path string, metadata tmux.SessionMetadata, previous mode) (tea.Model, tea.Cmd) {
+	if len(template.Parameters) > 0 {
+		m.mode = modeTemplateParameter
+		m.loading = false
+		m.parameterTemplate = template
+		m.parameterPath = path
+		m.parameterFallback = fallback
+		m.parameterMetadata = metadata
+		m.parameterValues = make(map[string]string, len(template.Parameters))
+		m.parameterIndex = 0
+		m.parameterCursor = parameterDefaultIndex(template.Parameters[0])
+		m.parameterPreviousMode = previous
+		return m, nil
+	}
+	return m.finishTemplateCreation(template, fallback, path, metadata, previous)
+}
+
+func (m Model) finishTemplateCreation(template sessionconfig.Template, fallback string, path string, metadata tmux.SessionMetadata, previous mode) (tea.Model, tea.Cmd) {
+	name, baseName, err := m.availableTemplateSessionName(template, fallback, path, metadata)
+	if err != nil {
+		m.loading = false
+		if previous == modePathSearch {
+			m.mode = modePathSearch
+		} else {
+			m.mode = modeBrowse
+		}
+		m.notice = err
+		return m, nil
+	}
+	metadata.BaseName = baseName
+	m.loading = true
+	m.mode = modeBrowse
+	if previous == modePathSearch {
+		m.stopPathStream()
+	}
+	return m, m.createSessionWithTemplate(name, path, metadata, template)
+}
+
+func (m Model) updateTemplateParameterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	parameter, ok := m.currentTemplateParameter()
+	if !ok {
+		m.clearTemplateParameters()
+		m.mode = modeBrowse
+		return m, nil
+	}
+	switch {
+	case keyMatches(msg, m.keys.Browse.Quit):
+		previous := m.parameterPreviousMode
+		m.clearTemplateParameters()
+		if previous == modePathSearch {
+			m.mode = modePathSearch
+		} else {
+			m.mode = modeBrowse
+		}
+	case keyMatches(msg, m.keys.Browse.Up):
+		if m.parameterCursor > 0 {
+			m.parameterCursor--
+		}
+	case keyMatches(msg, m.keys.Browse.Down):
+		if m.parameterCursor < len(parameter.Options)-1 {
+			m.parameterCursor++
+		}
+	case keyMatches(msg, m.keys.Browse.PageUp):
+		m.parameterCursor -= halfPageStep(commandListHeightForFrame(panelDialogFrame(m.dialogs, m.innerWidth(), m.innerHeight())))
+		if m.parameterCursor < 0 {
+			m.parameterCursor = 0
+		}
+	case keyMatches(msg, m.keys.Browse.PageDown):
+		m.parameterCursor += halfPageStep(commandListHeightForFrame(panelDialogFrame(m.dialogs, m.innerWidth(), m.innerHeight())))
+		if m.parameterCursor >= len(parameter.Options) {
+			m.parameterCursor = len(parameter.Options) - 1
+		}
+	case keyMatches(msg, m.keys.Browse.OpenSelected):
+		if m.parameterCursor < 0 || m.parameterCursor >= len(parameter.Options) {
+			return m, nil
+		}
+		m.parameterValues[parameter.Name] = parameter.Options[m.parameterCursor]
+		m.parameterIndex++
+		if m.parameterIndex < len(m.parameterTemplate.Parameters) {
+			m.parameterCursor = parameterDefaultIndex(m.parameterTemplate.Parameters[m.parameterIndex])
+			return m, nil
+		}
+		template, err := sessionconfig.WithParameterValues(m.parameterTemplate, m.parameterValues)
+		if err != nil {
+			m.notice = err
+			previous := m.parameterPreviousMode
+			m.clearTemplateParameters()
+			if previous == modePathSearch {
+				m.mode = modePathSearch
+			} else {
+				m.mode = modeBrowse
+			}
+			return m, nil
+		}
+		fallback := m.parameterFallback
+		path := m.parameterPath
+		metadata := m.parameterMetadata
+		previous := m.parameterPreviousMode
+		m.clearTemplateParameters()
+		return m.finishTemplateCreation(template, fallback, path, metadata, previous)
+	}
+	return m, nil
+}
+
+func (m Model) currentTemplateParameter() (sessionconfig.Parameter, bool) {
+	if m.parameterIndex < 0 || m.parameterIndex >= len(m.parameterTemplate.Parameters) {
+		return sessionconfig.Parameter{}, false
+	}
+	return m.parameterTemplate.Parameters[m.parameterIndex], true
+}
+
+func (m *Model) clearTemplateParameters() {
+	m.parameterTemplate = sessionconfig.Template{}
+	m.parameterPath = ""
+	m.parameterFallback = ""
+	m.parameterMetadata = tmux.SessionMetadata{}
+	m.parameterValues = nil
+	m.parameterIndex = 0
+	m.parameterCursor = 0
+	m.parameterPreviousMode = modeBrowse
+}
+
+func parameterDefaultIndex(parameter sessionconfig.Parameter) int {
+	for i, option := range parameter.Options {
+		if option == parameter.Default {
+			return i
+		}
+	}
+	return 0
 }
 
 func (m Model) hasSession(name string) bool {
@@ -4336,6 +4508,47 @@ func renderTemplatePicker(s styles, dialogs config.Dialogs, keys config.KeyBindi
 	descriptionBox := renderHelpDescription(descriptionLines, s, width)
 	footer := renderHelpDescription([]string{s.popupAccent.Render(keyListLabel(keys.Browse.OpenSelected)) + s.popupMuted.Render(" create") + s.popupBody.Render("   ") + s.popupAccent.Render(keyListLabel(keys.Browse.Quit)) + s.popupMuted.Render(" cancel")}, s, width)
 	return lipgloss.JoinVertical(lipgloss.Left, mainBox, descriptionBox, footer)
+}
+
+func renderTemplateParameterPicker(s styles, dialogs config.Dialogs, parameter sessionconfig.Parameter, index int, total int, cursor int, appWidth int, appHeight int) string {
+	frame := panelDialogFrame(dialogs, appWidth, appHeight)
+	width := frame.width
+	contentWidth := width - 2
+	horizontalPadding := 3
+	bodyWidth := contentWidth - horizontalPadding*2
+	if bodyWidth < 20 {
+		bodyWidth = 20
+	}
+	rowWidth := bodyWidth - 2
+	if rowWidth < 20 {
+		rowWidth = bodyWidth
+	}
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor >= len(parameter.Options) {
+		cursor = len(parameter.Options) - 1
+	}
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(s.popupAccent.Render(truncate(parameter.Prompt, bodyWidth)))
+	b.WriteString("\n\n")
+	for optionIndex, option := range parameter.Options {
+		selected := optionIndex == cursor
+		row := truncate(option, rowWidth)
+		if selected {
+			row = padSelectedRow(s.selected.Render(row), rowWidth, s)
+		} else {
+			row = s.popupBody.Render(row)
+		}
+		if rowWidth != bodyWidth {
+			row = renderPopupSelectionMarker(selected, s) + row + s.popupBody.Render(" ")
+		}
+		b.WriteString(row)
+		b.WriteString("\n")
+	}
+	position := fmt.Sprintf("%d/%d", index+1, total)
+	return renderTitledBox("Template Parameter", position, b.String(), width, panelMainBoxHeight(frame), horizontalPadding, s)
 }
 
 func renderTemplateRow(template sessionconfig.Template, query string, selected bool, s styles, width int) string {

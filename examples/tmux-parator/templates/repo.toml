@@ -1,11 +1,21 @@
 id = "repo"
 name = "Repository"
-focus = "shell.main.editor"
+session_name = "{workspace_name}-dev"
+focus = "{window_prefix}.main.editor"
 description = "Three-window repository workspace with nested panes."
 chip = "r"
 window_indicators = [" shell", " git", "󰇥 files", "󰎚 scratch"]
 enabled = true
 match = ["~/code/repos/*", "~/work/*"]
+
+[[parameters]]
+name = "editor"
+prompt = "Editor"
+options = ["nvim", "vim"]
+default = "nvim"
+
+[variables]
+window_prefix = "{session_name}-shell"
 
 [[hooks.before_create_command]]
 run = "git fetch --quiet"
@@ -23,7 +33,7 @@ run = "notes.sh"
 kinds = ["repo"]
 
 [[windows]]
-name = "shell"
+name = "{window_prefix}"
 focus = "main.editor"
 
 [windows.layout]
@@ -44,7 +54,7 @@ children = ["editor", "tests"]
 [windows.layout.main.editor]
 type = "pane"
 path = "."
-command = "nvim ."
+command = "{editor} ."
 
 [windows.layout.main.tests]
 type = "pane"

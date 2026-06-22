@@ -614,17 +614,27 @@ Local template example:
 ```toml
 id = "local"
 name = "Local Workspace"
-focus = "work.main"
+session_name = "{workspace_name}-dev"
+focus = "{window_prefix}.main"
 description = "Project-local workspace layout."
 chip = "lw"
 window_indicators = [" editor", " git"]
+
+[[parameters]]
+name = "editor"
+prompt = "Editor"
+options = ["nvim", "vim"]
+default = "nvim"
+
+[variables]
+window_prefix = "{session_name}-work"
 
 [[hooks.before_create_command]]
 run = "git fetch --quiet"
 kinds = ["repo"]
 
 [[windows]]
-name = "work"
+name = "{window_prefix}"
 focus = "main"
 
 [windows.layout]
@@ -634,7 +644,7 @@ children = ["main", "side"]
 
 [windows.layout.main]
 type = "pane"
-command = "nvim ."
+command = "{editor} ."
 
 [windows.layout.side]
 type = "pane"
@@ -647,12 +657,22 @@ See `examples/tmux-parator/` for a complete example directory. This is
 ```toml
 id = "repo"
 name = "Repository"
-focus = "shell.main.editor"
+session_name = "{workspace_name}-dev"
+focus = "{window_prefix}.main.editor"
 description = "Three-window repository workspace with nested panes."
 chip = "r"
 window_indicators = [" shell", " git", "󰇥 files", "󰎚 scratch"]
 enabled = true
 match = ["~/code/repos/*", "~/work/*"]
+
+[[parameters]]
+name = "editor"
+prompt = "Editor"
+options = ["nvim", "vim"]
+default = "nvim"
+
+[variables]
+window_prefix = "{session_name}-shell"
 
 [[hooks.before_create_command]]
 run = "git fetch --quiet"
@@ -663,7 +683,7 @@ run = "ready.sh"
 kinds = ["repo"]
 
 [[windows]]
-name = "shell"
+name = "{window_prefix}"
 focus = "main.editor"
 
 [windows.layout]
@@ -684,7 +704,7 @@ children = ["editor", "tests"]
 [windows.layout.main.editor]
 type = "pane"
 path = "."
-command = "nvim ."
+command = "{editor} ."
 
 [windows.layout.main.tests]
 type = "pane"
@@ -731,10 +751,17 @@ Session template fields:
 | --- | --- | --- |
 | `id` | template | Required stable identifier. It must be unique. |
 | `name` | template | Required display name. It must be unique, and enabled templates are sorted by this name. |
+| `session_name` | template | Optional interpolated base name for the created tmux session. It is sanitized and receives `_2`, `_3`, and later suffixes when needed. |
 | `focus` | template | Required final startup target in `window.pane.path` form, for example `shell.main.editor`. It must resolve to a pane. |
 | `description` | template | Optional description shown in the template picker. |
 | `chip` | template | Optional short searchable abbreviation rendered before the template name for quick fuzzy selection. |
 | `window_indicators` | template | Optional string or string list shown after the template name to summarize the template's windows. Entries may contain glyphs, text, or both and are separated by `·`. Indicator text participates in fuzzy search. |
+| `variables` | template | Optional string table defining reusable interpolation values. Variables can reference built-ins, environment variables, and other template variables. |
+| `parameters` | template | Optional ordered array of interactive option prompts. Each selected value becomes an interpolation variable during creation. |
+| `parameters.name` | parameter | Required unique placeholder name. It cannot conflict with built-ins or `[variables]`. |
+| `parameters.prompt` | parameter | Required label shown above the option list. |
+| `parameters.options` | parameter | Required non-empty list of unique selectable string values. |
+| `parameters.default` | parameter | Initially selected option. It must occur in `options`; when omitted, the first option is used. |
 | `enabled` | template | Optional flag for showing the template. Defaults to `true`. |
 | `match` | template | Optional path pattern or pattern list used by Enter to create matching paths with this template automatically. |
 | `hooks.before_create_command` | template | Optional array of hook tables. Each `[[hooks.before_create_command]]` entry runs one shell command before the tmux session is created. |
@@ -820,6 +847,16 @@ Layout rules:
   ordering after each script path is resolved.
 - Pane `command` and `script` entries do not have per-kind conditions. They are
   pane startup commands, intended to be visible in the pane when they run.
+- Pane commands start only after all windows and panes have been created,
+  layouts resized, metadata applied, and `after_create` hooks completed.
+  Commands are sent directly to their target panes without making those panes
+  visible. For startup panes, an inherited `allow-passthrough = all` is narrowed
+  to `on`; existing `on` and `off` values are preserved. This permits terminal
+  passthrough while a pane is visible but prevents a hidden TUI such as
+  OpenCode from sending terminal capability probes to a different active pane.
+  The configured final focus is selected before the tmux client switches into
+  the completed session. Interactive commands are sent to the shells created
+  during layout construction instead of respawning those shells.
 - Template `focus` starts with a window name, followed by child names joined by
   dots, and must end at a pane. For example, `shell.main.editor` targets the
   `editor` pane below the `main` group in the `shell` window.
@@ -827,11 +864,97 @@ Layout rules:
   within that `shell` window; `main` alone is invalid when it points at a
   layout group.
 
+### Template Interpolation
+
+Template values are expanded immediately before session creation. Interpolation
+is supported in template and window `focus`, window and pane names, pane paths,
+pane commands and scripts, and all before/after creation hooks.
+
+The optional `session_name` field is expanded first:
+
+```toml
+session_name = "{workspace_name}-dev"
+```
+
+For workspace `aoc`, this requests `aoc-dev`. The result is sanitized with the
+normal session-name rules and numbered when necessary, producing names such as
+`aoc-dev_2`. Other template fields then receive that final name through
+`{session_name}`. To prevent recursion, `session_name` cannot reference
+`{session_name}` directly or through a custom variable.
+
+Built-in placeholders:
+
+| Placeholder | Value |
+| --- | --- |
+| `{session_name}` | Final unique tmux session name, including a numeric suffix when required. |
+| `{workspace_name}` | Base name of the selected workspace directory. |
+| `{workspace_path}` | Selected workspace path. |
+| `{repo_root}` | Discovered repository/root path from session metadata. It can be empty for sessions without a root. |
+| `{session_kind}` | Session kind such as `repo`, `subdir`, `path`, or `manual`. |
+| `{template_id}` | Template `id`. |
+| `{template_name}` | Template display `name`. |
+| `{env.NAME}` | Value of environment variable `NAME`. Missing variables are errors. |
+
+Reusable values are declared in `[variables]` and referenced by name:
+
+```toml
+focus = "{window_prefix}.editor"
+
+[variables]
+window_prefix = "{session_name}-work"
+editor_command = "nvim {workspace_path}"
+
+[[windows]]
+name = "{window_prefix}"
+
+[windows.layout]
+type = "pane"
+name = "editor"
+command = "{editor_command}"
+```
+
+Interactive values are declared with repeated `[[parameters]]` tables:
+
+```toml
+[[parameters]]
+name = "monitor"
+prompt = "System monitor"
+options = ["btop", "htop"]
+default = "btop"
+
+[[windows]]
+name = "monitor"
+
+[windows.layout]
+type = "pane"
+name = "monitor"
+command = "{monitor}"
+```
+
+Selecting this template opens an option prompt with `btop` initially selected.
+The configured browse up/down keys change the selection, Enter accepts it, and
+Escape cancels session creation. Parameters are prompted in file order. Their
+selected values are available everywhere normal template variables are
+supported, including `session_name`, focus paths, names, paths, commands,
+scripts, and hooks.
+
+Variables may reference variables declared later in the table. Cycles and
+unknown variables are errors. Existing shell variables such as `${HOME}` are
+left unchanged. Use doubled braces to produce a literal placeholder:
+`{{session_name}}` becomes `{session_name}`.
+
+Interpolation is strict and runs before any hook or tmux command. Expanded
+window and pane names must remain non-empty and unique, and expanded focus paths
+must resolve to panes. A failure therefore cannot leave a partially created
+session.
+
 ## Session Names And Metadata
 
 `tmux-parator` keeps tmux session names short and readable:
 
 - The base session name is the selected leaf directory name.
+- When a selected template defines `session_name`, its expanded value replaces
+  the leaf directory name as the base.
 - Unsafe tmux-name characters are converted to `_`.
 - If the base name is available, it is used directly.
 - If the base name already exists for a different path, the next available

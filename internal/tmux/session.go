@@ -177,6 +177,14 @@ func (c Client) NewSession(ctx context.Context, name string, path string, metada
 }
 
 func (c Client) NewSessionWithLayout(ctx context.Context, name string, path string, metadata SessionMetadata, template sessionconfig.Template) (err error) {
+	return c.newSessionWithLayout(ctx, name, path, metadata, template, false)
+}
+
+func (c Client) NewSessionWithLayoutAndSwitch(ctx context.Context, name string, path string, metadata SessionMetadata, template sessionconfig.Template) (err error) {
+	return c.newSessionWithLayout(ctx, name, path, metadata, template, true)
+}
+
+func (c Client) newSessionWithLayout(ctx context.Context, name string, path string, metadata SessionMetadata, template sessionconfig.Template, switchAfterCreation bool) (err error) {
 	if err := validateSessionName(name); err != nil {
 		return err
 	}
@@ -185,6 +193,15 @@ func (c Client) NewSessionWithLayout(ctx context.Context, name string, path stri
 	}
 	if strings.TrimSpace(template.Focus) == "" {
 		return fmt.Errorf("template %q has no focus", template.Name)
+	}
+	template, err = sessionconfig.Render(template, sessionconfig.RenderContext{
+		SessionName:   name,
+		WorkspacePath: path,
+		RepoRoot:      metadata.Root,
+		SessionKind:   metadata.Kind,
+	})
+	if err != nil {
+		return err
 	}
 	if err := c.runTemplateHooks(ctx, path, "before_create", metadata.Kind, template.BeforeCreateHooks); err != nil {
 		return err
@@ -215,6 +232,7 @@ func (c Client) NewSessionWithLayout(ctx context.Context, name string, path stri
 		return fmt.Errorf("create tmux session: %w", err)
 	}
 	windowTargets := map[string]windowTarget{}
+	var paneStartups []paneStartup
 	firstResult, err := c.applyWindowLayout(ctx, path, firstWindow, firstPane)
 	if err != nil {
 		return err
@@ -224,6 +242,7 @@ func (c Client) NewSessionWithLayout(ctx context.Context, name string, path stri
 			return err
 		}
 	}
+	paneStartups = append(paneStartups, firstResult.startups...)
 	windowTargets[firstWindow.Name] = windowTarget{id: firstWindowID, panes: firstResult.panes}
 	for _, window := range template.Windows[1:] {
 		args := []string{"new-window", "-d", "-P", "-F", "#{window_id} #{pane_id}", "-t", exactSessionTarget(name), "-n", window.Name}
@@ -247,6 +266,7 @@ func (c Client) NewSessionWithLayout(ctx context.Context, name string, path stri
 				return err
 			}
 		}
+		paneStartups = append(paneStartups, result.startups...)
 		windowTargets[window.Name] = windowTarget{id: windowID, panes: result.panes}
 	}
 	if err := c.setSessionMetadata(ctx, name, metadata); err != nil {
@@ -256,6 +276,12 @@ func (c Client) NewSessionWithLayout(ctx context.Context, name string, path stri
 	if err != nil {
 		return fmt.Errorf("template %q: %w", template.Name, err)
 	}
+	if err := c.runTemplateHooks(ctx, path, "after_create", metadata.Kind, template.AfterCreateHooks); err != nil {
+		return err
+	}
+	if err := c.startPaneCommands(ctx, paneStartups); err != nil {
+		return err
+	}
 	out, err = c.runner.Run(ctx, "tmux", "select-window", "-t", focusWindow)
 	if err != nil {
 		return commandError("select tmux window", out, err)
@@ -263,8 +289,10 @@ func (c Client) NewSessionWithLayout(ctx context.Context, name string, path stri
 	if err := c.selectPane(ctx, focusPane); err != nil {
 		return err
 	}
-	if err := c.runTemplateHooks(ctx, path, "after_create", metadata.Kind, template.AfterCreateHooks); err != nil {
-		return err
+	if switchAfterCreation {
+		if err := c.SwitchSession(ctx, name); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -321,6 +349,13 @@ type layoutResult struct {
 	focusPane string
 	panes     map[string]string
 	nodes     map[string]string
+	startups  []paneStartup
+}
+
+type paneStartup struct {
+	paneID string
+	path   string
+	node   sessionconfig.Node
 }
 
 type windowTarget struct {
@@ -374,9 +409,6 @@ func (c Client) selectPane(ctx context.Context, focusPane string) error {
 
 func (c Client) applyLayoutNode(ctx context.Context, basePath string, paneID string, node sessionconfig.Node, prefix string) (layoutResult, error) {
 	if node.Type == "pane" {
-		if err := c.preparePane(ctx, basePath, paneID, node); err != nil {
-			return layoutResult{}, err
-		}
 		panes := map[string]string{}
 		nodes := map[string]string{}
 		if node.Name != "" {
@@ -384,7 +416,8 @@ func (c Client) applyLayoutNode(ctx context.Context, basePath string, paneID str
 			panes[path] = paneID
 			nodes[path] = paneID
 		}
-		return layoutResult{focusPane: paneID, panes: panes, nodes: nodes}, nil
+		startups := []paneStartup{{paneID: paneID, path: resolvePanePath(basePath, node.Path), node: node}}
+		return layoutResult{focusPane: paneID, panes: panes, nodes: nodes, startups: startups}, nil
 	}
 	if len(node.Children) == 0 {
 		return layoutResult{}, fmt.Errorf("layout node %q has no children", node.Name)
@@ -393,6 +426,7 @@ func (c Client) applyLayoutNode(ctx context.Context, basePath string, paneID str
 	focusPane := paneID
 	panes := map[string]string{}
 	nodes := map[string]string{}
+	var startups []paneStartup
 	childPrefix := prefix
 	if node.Name != "" {
 		childPrefix = nodePath(prefix, node.Name)
@@ -421,6 +455,7 @@ func (c Client) applyLayoutNode(ctx context.Context, basePath string, paneID str
 			}
 			mergePaneMaps(panes, result.panes)
 			mergePaneMaps(nodes, result.nodes)
+			startups = append(startups, result.startups...)
 			childPane = nextPane
 			continue
 		}
@@ -433,11 +468,12 @@ func (c Client) applyLayoutNode(ctx context.Context, basePath string, paneID str
 		}
 		mergePaneMaps(panes, result.panes)
 		mergePaneMaps(nodes, result.nodes)
+		startups = append(startups, result.startups...)
 	}
 	if node.Name != "" {
 		nodes[childPrefix] = focusPane
 	}
-	return layoutResult{focusPane: focusPane, panes: panes, nodes: nodes}, nil
+	return layoutResult{focusPane: focusPane, panes: panes, nodes: nodes, startups: startups}, nil
 }
 
 func (c Client) windowSize(ctx context.Context, paneID string) (int, int, error) {
@@ -621,30 +657,41 @@ func largestAllocationIndex(allocations []int) int {
 	return index
 }
 
-func (c Client) preparePane(ctx context.Context, basePath string, paneID string, node sessionconfig.Node) error {
-	commands := paneCommands(node)
-	createPath := resolvePanePath(basePath, node.Path)
-	args := []string{"respawn-pane", "-k", "-t", paneID}
-	if strings.TrimSpace(createPath) != "" {
-		args = append(args, "-c", createPath)
-	}
-	if len(commands) > 0 && node.CommandMode == sessionconfig.CommandModeWrapper {
-		args = append(args, "/bin/sh", "-lc", paneCommandWrapper(commands))
-	}
-	out, err := c.runner.Run(ctx, "tmux", args...)
-	if err != nil {
-		return commandError("start tmux pane command", out, err)
-	}
-	if len(commands) == 0 {
-		return nil
-	}
-	if node.CommandMode == sessionconfig.CommandModeWrapper {
-		return nil
-	}
-	for _, command := range commands {
-		if err := c.sendPaneCommand(ctx, paneID, command); err != nil {
+func (c Client) startPaneCommands(ctx context.Context, startups []paneStartup) error {
+	for _, startup := range startups {
+		commands := paneCommands(startup.node)
+		if len(commands) == 0 {
+			continue
+		}
+		if err := c.restrictInvisiblePassthrough(ctx, startup.paneID); err != nil {
 			return err
 		}
+		if startup.node.CommandMode == sessionconfig.CommandModeWrapper {
+			args := []string{"respawn-pane", "-k", "-t", startup.paneID}
+			if strings.TrimSpace(startup.path) != "" {
+				args = append(args, "-c", startup.path)
+			}
+			args = append(args, "/bin/sh", "-lc", paneCommandWrapper(commands))
+			out, err := c.runner.Run(ctx, "tmux", args...)
+			if err != nil {
+				return commandError("start tmux pane command", out, err)
+			}
+			continue
+		}
+		for _, command := range commands {
+			if err := c.sendPaneCommand(ctx, startup.paneID, command); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (c Client) restrictInvisiblePassthrough(ctx context.Context, paneID string) error {
+	value := "#{?#{==:#{allow-passthrough},all},on,#{allow-passthrough}}"
+	out, err := c.runner.Run(ctx, "tmux", "set-option", "-p", "-F", "-t", paneID, "allow-passthrough", value)
+	if err != nil {
+		return commandError("restrict tmux pane passthrough", out, err)
 	}
 	return nil
 }

@@ -123,7 +123,7 @@ func TestExactSessionTarget(t *testing.T) {
 
 func TestNewSessionTagsParatorMetadata(t *testing.T) {
 	runner := &recordingRunner{}
-	client := NewClient(runner)
+	client := newTestClient(runner)
 
 	err := client.NewSession(context.Background(), "repos_tmux-parator", "/Users/me/repos/tmux-parator", SessionMetadata{
 		Kind:       "repo",
@@ -154,7 +154,7 @@ func TestNewSessionTagsParatorMetadata(t *testing.T) {
 
 func TestSwitchLastSessionUsesTmuxLastSession(t *testing.T) {
 	runner := &recordingRunner{}
-	client := NewClient(runner)
+	client := newTestClient(runner)
 
 	if err := client.SwitchLastSession(context.Background()); err != nil {
 		t.Fatalf("SwitchLastSession() unexpected error: %v", err)
@@ -168,7 +168,7 @@ func TestSwitchLastSessionUsesTmuxLastSession(t *testing.T) {
 
 func TestRenameSessionUsesExactOldSessionTarget(t *testing.T) {
 	runner := &recordingRunner{}
-	client := NewClient(runner)
+	client := newTestClient(runner)
 
 	if err := client.RenameSession(context.Background(), "old:name", "new-name"); err != nil {
 		t.Fatalf("RenameSession() unexpected error: %v", err)
@@ -182,7 +182,7 @@ func TestRenameSessionUsesExactOldSessionTarget(t *testing.T) {
 
 func TestNewSessionWithLayoutCreatesNestedNamedChildLayout(t *testing.T) {
 	runner := &recordingRunner{outputs: []string{"@1 %1\n", "%2\n", "%3\n", "%4\n"}}
-	client := NewClient(runner)
+	client := newTestClient(runner)
 	template := sessionconfig.Template{
 		ID:    "zen",
 		Name:  "Zen Mode",
@@ -234,8 +234,8 @@ func TestNewSessionWithLayoutCreatesNestedNamedChildLayout(t *testing.T) {
 	if !hasCall(runner.calls, []string{"tmux", "split-window", "-d", "-P", "-F", "#{pane_id}", "-v", "-t", "%2", "-c", "/Users/me/repo"}) {
 		t.Fatalf("runner calls missing vertical split: %#v", runner.calls)
 	}
-	if !hasCallPrefix(runner.calls, []string{"tmux", "respawn-pane", "-k", "-t", "%2", "-c", "/Users/me/repo"}) {
-		t.Fatalf("runner calls missing respawn-pane prefix: %#v", runner.calls)
+	if hasCallPrefix(runner.calls, []string{"tmux", "respawn-pane", "-k", "-t", "%2"}) {
+		t.Fatalf("runner calls respawned interactive pane: %#v", runner.calls)
 	}
 	if !hasCall(runner.calls, []string{"tmux", "send-keys", "-t", "%2", "-l", "nvim ."}) {
 		t.Fatalf("runner calls missing typed nvim command: %#v", runner.calls)
@@ -264,11 +264,18 @@ func TestNewSessionWithLayoutCreatesNestedNamedChildLayout(t *testing.T) {
 	if !callAppearsAfter(runner.calls, []string{"tmux", "select-pane", "-t", "%2"}, []string{"tmux", "select-window", "-t", "@1"}) {
 		t.Fatalf("final focus pane was not selected after first window: %#v", runner.calls)
 	}
+	passthroughCall := []string{"tmux", "set-option", "-p", "-F", "-t", "%2", "allow-passthrough", "#{?#{==:#{allow-passthrough},all},on,#{allow-passthrough}}"}
+	if !callAppearsAfter(runner.calls, []string{"tmux", "send-keys", "-t", "%2", "-l", "nvim ."}, passthroughCall) {
+		t.Fatalf("pane command started before restricting invisible passthrough: %#v", runner.calls)
+	}
+	if !callAppearsAfter(runner.calls, []string{"tmux", "select-window", "-t", "@1"}, []string{"tmux", "send-keys", "-t", "%2", "C-m"}) {
+		t.Fatalf("final focus was selected before pane startup completed: %#v", runner.calls)
+	}
 }
 
 func TestNewSessionWithLayoutCreatesMultipleWindows(t *testing.T) {
 	runner := &recordingRunner{outputs: []string{"@1 %1\n", "@2 %2\n"}}
-	client := NewClient(runner)
+	client := newTestClient(runner)
 	template := sessionconfig.Template{
 		ID:    "dev",
 		Name:  "Development",
@@ -292,11 +299,9 @@ func TestNewSessionWithLayoutCreatesMultipleWindows(t *testing.T) {
 			t.Fatalf("runner calls missing %#v in %#v", want, runner.calls)
 		}
 	}
-	if !hasCallPrefix(runner.calls, []string{"tmux", "respawn-pane", "-k", "-t", "%1", "-c", "/Users/me/repo"}) {
-		t.Fatalf("runner calls missing first respawn-pane prefix: %#v", runner.calls)
-	}
-	if !hasCallPrefix(runner.calls, []string{"tmux", "respawn-pane", "-k", "-t", "%2", "-c", "/Users/me/repo/tools"}) {
-		t.Fatalf("runner calls missing second respawn-pane prefix: %#v", runner.calls)
+	if hasCallPrefix(runner.calls, []string{"tmux", "respawn-pane", "-k", "-t", "%1"}) ||
+		hasCallPrefix(runner.calls, []string{"tmux", "respawn-pane", "-k", "-t", "%2"}) {
+		t.Fatalf("runner calls respawned interactive panes: %#v", runner.calls)
 	}
 	if !hasCall(runner.calls, []string{"tmux", "send-keys", "-t", "%1", "-l", "nvim ."}) {
 		t.Fatalf("runner calls missing typed nvim command: %#v", runner.calls)
@@ -314,11 +319,20 @@ func TestNewSessionWithLayoutCreatesMultipleWindows(t *testing.T) {
 		!hasCall(runner.calls, []string{"tmux", "select-pane", "-t", "%2"}) {
 		t.Fatalf("runner calls did not select configured final target: %#v", runner.calls)
 	}
+	for _, paneID := range []string{"%1", "%2"} {
+		passthroughCall := []string{"tmux", "set-option", "-p", "-F", "-t", paneID, "allow-passthrough", "#{?#{==:#{allow-passthrough},all},on,#{allow-passthrough}}"}
+		if !hasCall(runner.calls, passthroughCall) {
+			t.Fatalf("runner calls did not restrict invisible passthrough for %s: %#v", paneID, runner.calls)
+		}
+	}
+	if !callAppearsAfter(runner.calls, []string{"tmux", "select-window", "-t", "@2"}, []string{"tmux", "send-keys", "-t", "%2", "C-m"}) {
+		t.Fatalf("final focus was not selected after pane startup: %#v", runner.calls)
+	}
 }
 
 func TestNewSessionWithLayoutWrapperCommandModeRespawnsShellCommand(t *testing.T) {
 	runner := &recordingRunner{outputs: []string{"@1 %1\n"}}
-	client := NewClient(runner)
+	client := newTestClient(runner)
 	template := sessionconfig.Template{
 		ID:    "wrapper",
 		Name:  "Wrapper",
@@ -350,11 +364,24 @@ func TestNewSessionWithLayoutWrapperCommandModeRespawnsShellCommand(t *testing.T
 	if hasCall(runner.calls, []string{"tmux", "send-keys", "-t", "%1", "-l", "yazi"}) {
 		t.Fatalf("runner calls typed yazi interactively in wrapper mode: %#v", runner.calls)
 	}
+	var respawnCall []string
+	for _, call := range runner.calls {
+		if len(call) >= 5 && reflect.DeepEqual(call[:5], []string{"tmux", "respawn-pane", "-k", "-t", "%1"}) {
+			respawnCall = call
+			break
+		}
+	}
+	if respawnCall == nil {
+		t.Fatalf("runner calls missing wrapper respawn: %#v", runner.calls)
+	}
+	if !callAppearsAfter(runner.calls, []string{"tmux", "select-window", "-t", "@1"}, respawnCall) {
+		t.Fatalf("final focus was not selected after wrapper startup: %#v", runner.calls)
+	}
 }
 
 func TestNewSessionWithLayoutSendsPaneCommandListIndividually(t *testing.T) {
 	runner := &recordingRunner{outputs: []string{"@1 %1\n"}}
-	client := NewClient(runner)
+	client := newTestClient(runner)
 	template := sessionconfig.Template{
 		ID:    "commands",
 		Name:  "Commands",
@@ -387,9 +414,40 @@ func TestNewSessionWithLayoutSendsPaneCommandListIndividually(t *testing.T) {
 	}
 }
 
+func TestNewSessionWithLayoutAndSwitchSwitchesAfterStartingCommandsAndSelectingFocus(t *testing.T) {
+	runner := &recordingRunner{outputs: []string{"@1 %1\n", "@2 %2\n"}}
+	client := newTestClient(runner)
+	template := sessionconfig.Template{
+		ID:    "tuis",
+		Name:  "TUIs",
+		Focus: "shell.shell",
+		Windows: []sessionconfig.Window{
+			{Name: "shell", Layout: sessionconfig.Node{Name: "shell", Type: "pane"}},
+			{Name: "agent", Layout: sessionconfig.Node{Name: "agent", Type: "pane", Command: "opencode"}},
+		},
+	}
+
+	if err := client.NewSessionWithLayoutAndSwitch(context.Background(), "repo", "/Users/me/repo", tmuxMetadata(), template); err != nil {
+		t.Fatalf("NewSessionWithLayoutAndSwitch() error = %v", err)
+	}
+	switchCall := []string{"tmux", "switch-client", "-t", "=repo:"}
+	startCall := []string{"tmux", "send-keys", "-t", "%2", "-l", "opencode"}
+	if !callAppearsAfter(runner.calls, switchCall, startCall) {
+		t.Fatalf("client switched before pane command startup: %#v", runner.calls)
+	}
+	if hasCall(runner.calls, []string{"tmux", "select-window", "-t", "%2"}) ||
+		hasCall(runner.calls, []string{"tmux", "select-pane", "-t", "%2"}) {
+		t.Fatalf("startup activated the hidden OpenCode pane: %#v", runner.calls)
+	}
+	focusCall := []string{"tmux", "select-pane", "-t", "%1"}
+	if !callAppearsAfter(runner.calls, switchCall, focusCall) {
+		t.Fatalf("client switched before final focus was selected: %#v", runner.calls)
+	}
+}
+
 func TestNewSessionWithLayoutRunsTemplateHooksAroundCreate(t *testing.T) {
 	runner := &recordingRunner{outputs: []string{"@1 %1\n"}}
-	client := NewClient(runner)
+	client := newTestClient(runner)
 	template := sessionconfig.Template{
 		ID:    "dev",
 		Name:  "Development",
@@ -420,15 +478,19 @@ func TestNewSessionWithLayoutRunsTemplateHooksAroundCreate(t *testing.T) {
 		t.Fatalf("runner calls prefix = %#v, want %#v", runner.calls, wantPrefix)
 	}
 	afterCall := []string{"dir:/Users/me/repo", "/bin/sh", "-c", "echo ready"}
-	selectCall := []string{"tmux", "select-window", "-t", "@1"}
-	if !callAppearsAfter(runner.calls, afterCall, selectCall) {
-		t.Fatalf("after_create hook did not run after select-window: %#v", runner.calls)
+	metadataCall := []string{"tmux", "set-option", "-t", "=repo:", "@tmux-parator.base_name", "repo"}
+	if !callAppearsAfter(runner.calls, afterCall, metadataCall) {
+		t.Fatalf("after_create hook did not run after metadata: %#v", runner.calls)
+	}
+	commandCall := []string{"tmux", "send-keys", "-t", "%1", "-l", "nvim ."}
+	if !callAppearsAfter(runner.calls, commandCall, afterCall) {
+		t.Fatalf("pane command did not run after after_create hook: %#v", runner.calls)
 	}
 }
 
 func TestNewSessionWithLayoutStopsWhenBeforeCreateHookFails(t *testing.T) {
 	runner := &recordingRunner{errors: []error{errors.New("exit status 1")}}
-	client := NewClient(runner)
+	client := newTestClient(runner)
 	template := sessionconfig.Template{
 		ID:    "dev",
 		Name:  "Development",
@@ -437,7 +499,7 @@ func TestNewSessionWithLayoutStopsWhenBeforeCreateHookFails(t *testing.T) {
 			{Run: "git fetch --quiet"},
 		},
 		Windows: []sessionconfig.Window{
-			{Name: "code", Layout: sessionconfig.Node{Name: "editor", Type: "pane"}},
+			{Name: "code", Layout: sessionconfig.Node{Name: "editor", Type: "pane", Command: "nvim ."}},
 		},
 	}
 
@@ -457,7 +519,7 @@ func TestNewSessionWithLayoutRollsBackWhenAfterCreateHookFails(t *testing.T) {
 			"dir:/Users/me/repo /bin/sh -c echo ready": errors.New("exit status 1"),
 		},
 	}
-	client := NewClient(runner)
+	client := newTestClient(runner)
 	template := sessionconfig.Template{
 		ID:    "dev",
 		Name:  "Development",
@@ -477,6 +539,9 @@ func TestNewSessionWithLayoutRollsBackWhenAfterCreateHookFails(t *testing.T) {
 	if !hasCall(runner.calls, []string{"tmux", "kill-session", "-t", "=repo:"}) {
 		t.Fatalf("runner calls missing rollback kill-session: %#v", runner.calls)
 	}
+	if hasCall(runner.calls, []string{"tmux", "send-keys", "-t", "%1", "-l", "nvim ."}) {
+		t.Fatalf("runner calls started pane command after failed after_create hook: %#v", runner.calls)
+	}
 }
 
 func TestNewSessionWithLayoutReportsRollbackFailure(t *testing.T) {
@@ -487,7 +552,7 @@ func TestNewSessionWithLayoutReportsRollbackFailure(t *testing.T) {
 			"tmux kill-session -t =repo:":              errors.New("kill failed"),
 		},
 	}
-	client := NewClient(runner)
+	client := newTestClient(runner)
 	template := sessionconfig.Template{
 		ID:    "dev",
 		Name:  "Development",
@@ -510,7 +575,7 @@ func TestNewSessionWithLayoutReportsRollbackFailure(t *testing.T) {
 
 func TestNewSessionWithLayoutRunsOnlyMatchingKindHooks(t *testing.T) {
 	runner := &recordingRunner{outputs: []string{"@1 %1\n"}}
-	client := NewClient(runner)
+	client := newTestClient(runner)
 	template := sessionconfig.Template{
 		ID:    "dev",
 		Name:  "Development",
@@ -552,7 +617,7 @@ func TestNewSessionWithLayoutRunsOnlyMatchingKindHooks(t *testing.T) {
 
 func TestNewSessionWithLayoutResizesAllPanesFromConfigOrder(t *testing.T) {
 	runner := &recordingRunner{outputs: []string{"@1 %1\n", "%2\n", "%3\n", "%4\n"}}
-	client := NewClient(runner)
+	client := newTestClient(runner)
 	template := sessionconfig.Template{
 		ID:    "wide",
 		Name:  "Wide",
@@ -598,7 +663,7 @@ func TestNewSessionWithLayoutResizesAllPanesFromConfigOrder(t *testing.T) {
 
 func TestNewSessionWithLayoutResizesRepositoryStyleRightWideLayout(t *testing.T) {
 	runner := &recordingRunner{outputs: []string{"@1 %1\n", "%2\n", "%3\n"}}
-	client := NewClient(runner)
+	client := newTestClient(runner)
 	template := sessionconfig.Template{
 		ID:    "repo",
 		Name:  "Repository",
@@ -656,6 +721,53 @@ func TestDistributeCellsUsesPaneBudgetExcludingSeparators(t *testing.T) {
 	}
 }
 
+func TestNewSessionWithLayoutInterpolatesBeforeRunningCommands(t *testing.T) {
+	runner := &recordingRunner{outputs: []string{"@1 %1\n"}}
+	client := newTestClient(runner)
+	template := sessionconfig.Template{
+		ID:    "repo",
+		Name:  "Repository",
+		Focus: "{session_name}-work.shell",
+		Windows: []sessionconfig.Window{{
+			Name:   "{session_name}-work",
+			Layout: sessionconfig.Node{Type: "pane", Name: "shell", Command: "echo {workspace_name}"},
+		}},
+	}
+
+	err := client.NewSessionWithLayout(context.Background(), "aoc", "/tmp/repos/aoc", SessionMetadata{Kind: "repo"}, template)
+	if err != nil {
+		t.Fatalf("NewSessionWithLayout() error = %v", err)
+	}
+	if !hasCallContaining(runner.calls, "aoc-work") {
+		t.Fatalf("runner calls missing interpolated window name: %#v", runner.calls)
+	}
+	if !hasCallContaining(runner.calls, "echo aoc") {
+		t.Fatalf("runner calls missing interpolated pane command: %#v", runner.calls)
+	}
+}
+
+func TestNewSessionWithLayoutInterpolationFailureHasNoSideEffects(t *testing.T) {
+	runner := &recordingRunner{}
+	client := newTestClient(runner)
+	template := sessionconfig.Template{
+		ID:    "repo",
+		Name:  "Repository",
+		Focus: "work.shell",
+		Windows: []sessionconfig.Window{{
+			Name:   "work",
+			Layout: sessionconfig.Node{Type: "pane", Name: "shell", Command: "echo {missing}"},
+		}},
+	}
+
+	err := client.NewSessionWithLayout(context.Background(), "aoc", "/tmp/repos/aoc", SessionMetadata{Kind: "repo"}, template)
+	if err == nil || !strings.Contains(err.Error(), `unknown variable "missing"`) {
+		t.Fatalf("NewSessionWithLayout() error = %v, want unknown variable error", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner calls = %#v, want no side effects", runner.calls)
+	}
+}
+
 func TestDistributeCellsUsesRelativeSizes(t *testing.T) {
 	got := distributeCells(118, []int{33, 33, 33})
 	want := []int{39, 40, 39}
@@ -674,7 +786,7 @@ func TestDistributeCellsPreservesMirroredSizesWhenRemainderCannotBeSplit(t *test
 
 func TestListSessionsRequestsPaneCurrentPath(t *testing.T) {
 	runner := &recordingRunner{}
-	client := NewClient(runner)
+	client := newTestClient(runner)
 
 	if _, err := client.ListSessions(context.Background()); err != nil {
 		t.Fatalf("ListSessions() unexpected error: %v", err)
@@ -693,6 +805,10 @@ type recordingRunner struct {
 	outputs      []string
 	errors       []error
 	errorsByCall map[string]error
+}
+
+func newTestClient(runner Runner) Client {
+	return NewClient(runner)
 }
 
 func (r *recordingRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
