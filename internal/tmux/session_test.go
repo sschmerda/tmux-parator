@@ -380,7 +380,10 @@ func TestNewSessionWithLayoutWrapperCommandModeRespawnsShellCommand(t *testing.T
 }
 
 func TestNewSessionWithLayoutSendsPaneCommandListIndividually(t *testing.T) {
-	runner := &recordingRunner{outputs: []string{"@1 %1\n"}}
+	runner := &recordingRunner{
+		outputs:    []string{"@1 %1\n"},
+		paneStates: []string{"100 100\n", "100 100\n", "200\n", "100\n", "100\n"},
+	}
 	client := newTestClient(runner)
 	template := sessionconfig.Template{
 		ID:    "commands",
@@ -411,6 +414,63 @@ func TestNewSessionWithLayoutSendsPaneCommandListIndividually(t *testing.T) {
 	}
 	if hasCall(runner.calls, []string{"tmux", "send-keys", "-t", "%1", "-l", "make generate && go test ./..."}) {
 		t.Fatalf("runner calls chained pane commands: %#v", runner.calls)
+	}
+	firstEnter := []string{"tmux", "send-keys", "-t", "%1", "C-m"}
+	secondCommand := []string{"tmux", "send-keys", "-t", "%1", "-l", "go test ./..."}
+	if !paneStateReadsBetween(runner.calls, firstEnter, secondCommand, 3) {
+		t.Fatalf("second command was sent before the first returned to the shell: %#v", runner.calls)
+	}
+}
+
+func TestNewSessionWithLayoutDoesNotWaitForFinalPaneCommand(t *testing.T) {
+	runner := &recordingRunner{
+		outputs:    []string{"@1 %1\n"},
+		paneStates: []string{"100 100\n", "100 100\n"},
+	}
+	client := newTestClient(runner)
+	template := sessionconfig.Template{
+		ID:    "agent",
+		Name:  "Agent",
+		Focus: "agent.agent",
+		Windows: []sessionconfig.Window{{
+			Name:   "agent",
+			Layout: sessionconfig.Node{Name: "agent", Type: "pane", Command: "opencode"},
+		}},
+	}
+
+	if err := client.NewSessionWithLayout(context.Background(), "repo", "/Users/me/repo", tmuxMetadata(), template); err != nil {
+		t.Fatalf("NewSessionWithLayout() unexpected error: %v", err)
+	}
+
+	enter := callIndex(runner.calls, []string{"tmux", "send-keys", "-t", "%1", "C-m"})
+	if enter < 0 {
+		t.Fatalf("runner calls missing final command Enter: %#v", runner.calls)
+	}
+	for _, call := range runner.calls[enter+1:] {
+		if isProcessGroupRead(call) {
+			t.Fatalf("final command unexpectedly waited for completion: %#v", runner.calls)
+		}
+	}
+}
+
+func TestWaitForPaneCommandHandlesFastCommandWithoutObservedTransition(t *testing.T) {
+	runner := &recordingRunner{
+		paneStates: []string{"100\n", "100\n", "100\n"},
+	}
+	client := newTestClient(runner)
+
+	if err := client.waitForPaneCommand(context.Background(), paneShell{paneID: "%1", pid: "10", pgid: "100"}); err != nil {
+		t.Fatalf("waitForPaneCommand() unexpected error: %v", err)
+	}
+
+	stateReads := 0
+	for _, call := range runner.calls {
+		if isProcessGroupRead(call) {
+			stateReads++
+		}
+	}
+	if stateReads != client.paneCommandStablePolls {
+		t.Fatalf("pane state reads = %d, want %d: %#v", stateReads, client.paneCommandStablePolls, runner.calls)
 	}
 }
 
@@ -803,12 +863,17 @@ func TestListSessionsRequestsPaneCurrentPath(t *testing.T) {
 type recordingRunner struct {
 	calls        [][]string
 	outputs      []string
+	paneStates   []string
 	errors       []error
 	errorsByCall map[string]error
 }
 
 func newTestClient(runner Runner) Client {
-	return NewClient(runner)
+	client := NewClient(runner)
+	client.panePollInterval = 0
+	client.paneReadyStablePolls = 2
+	client.paneCommandStablePolls = 3
+	return client
 }
 
 func (r *recordingRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -824,6 +889,20 @@ func (r *recordingRunner) Run(_ context.Context, name string, args ...string) ([
 		out := r.outputs[0]
 		r.outputs = r.outputs[1:]
 		return []byte(out), nil
+	}
+	if isPaneProcessRead(call) {
+		return []byte("10\t0\n"), nil
+	}
+	if isProcessGroupRead(call) {
+		if len(r.paneStates) > 0 {
+			out := r.paneStates[0]
+			r.paneStates = r.paneStates[1:]
+			return []byte(out), nil
+		}
+		if containsArg(call, "pgid=,tpgid=") {
+			return []byte("100 100\n"), nil
+		}
+		return []byte("100\n"), nil
 	}
 	if len(args) > 0 && args[0] == "display-message" {
 		return []byte("120 40\n"), nil
@@ -893,6 +972,47 @@ func callAppearsAfter(calls [][]string, call []string, previous []string) bool {
 		}
 	}
 	return false
+}
+
+func paneStateReadsBetween(calls [][]string, first []string, second []string, minimum int) bool {
+	firstIndex := callIndex(calls, first)
+	secondIndex := callIndex(calls, second)
+	if firstIndex < 0 || secondIndex <= firstIndex {
+		return false
+	}
+	count := 0
+	for _, call := range calls[firstIndex+1 : secondIndex] {
+		if isProcessGroupRead(call) {
+			count++
+		}
+	}
+	return count >= minimum
+}
+
+func callIndex(calls [][]string, want []string) int {
+	for index, call := range calls {
+		if reflect.DeepEqual(call, want) {
+			return index
+		}
+	}
+	return -1
+}
+
+func isPaneProcessRead(call []string) bool {
+	return len(call) == 6 &&
+		call[0] == "tmux" &&
+		call[1] == "display-message" &&
+		call[2] == "-p" &&
+		call[3] == "-t" &&
+		call[5] == "#{pane_pid}\t#{pane_dead}"
+}
+
+func isProcessGroupRead(call []string) bool {
+	return len(call) >= 5 &&
+		call[0] == "ps" &&
+		call[1] == "-o" &&
+		(call[2] == "pgid=,tpgid=" || call[2] == "tpgid=") &&
+		call[3] == "-p"
 }
 
 func hasCallStartingWith(calls [][]string, prefix string) bool {

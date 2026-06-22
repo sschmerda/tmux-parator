@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/sschmerda/tmux-parator/internal/sessionconfig"
 )
@@ -85,11 +86,19 @@ type SessionMetadata struct {
 }
 
 type Client struct {
-	runner Runner
+	runner                 Runner
+	panePollInterval       time.Duration
+	paneReadyStablePolls   int
+	paneCommandStablePolls int
 }
 
 func NewClient(runner Runner) Client {
-	return Client{runner: runner}
+	return Client{
+		runner:                 runner,
+		panePollInterval:       10 * time.Millisecond,
+		paneReadyStablePolls:   3,
+		paneCommandStablePolls: 100,
+	}
 }
 
 func (c Client) ListSessions(ctx context.Context) ([]Session, error) {
@@ -678,9 +687,18 @@ func (c Client) startPaneCommands(ctx context.Context, startups []paneStartup) e
 			}
 			continue
 		}
-		for _, command := range commands {
+		shell, err := c.waitForPaneShell(ctx, startup.paneID)
+		if err != nil {
+			return err
+		}
+		for index, command := range commands {
 			if err := c.sendPaneCommand(ctx, startup.paneID, command); err != nil {
 				return err
+			}
+			if index < len(commands)-1 {
+				if err := c.waitForPaneCommand(ctx, shell); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -706,6 +724,125 @@ func (c Client) sendPaneCommand(ctx context.Context, paneID string, command stri
 		return commandError("run tmux pane command", out, err)
 	}
 	return nil
+}
+
+type paneShell struct {
+	paneID string
+	pid    string
+	pgid   string
+}
+
+func (c Client) waitForPaneShell(ctx context.Context, paneID string) (paneShell, error) {
+	required := c.paneReadyStablePolls
+	if required < 1 {
+		required = 1
+	}
+	stablePolls := 0
+	for {
+		shell, foregroundPGID, err := c.paneForegroundProcess(ctx, paneID)
+		if err != nil {
+			return paneShell{}, err
+		}
+		if shell.pgid == foregroundPGID {
+			stablePolls++
+		} else {
+			stablePolls = 0
+		}
+		if stablePolls >= required {
+			return shell, nil
+		}
+		if err := c.waitPanePoll(ctx); err != nil {
+			return paneShell{}, err
+		}
+	}
+}
+
+func (c Client) waitForPaneCommand(ctx context.Context, shell paneShell) error {
+	required := c.paneCommandStablePolls
+	if required < 1 {
+		required = 1
+	}
+	returnRequired := c.paneReadyStablePolls
+	if returnRequired < 1 {
+		returnRequired = 1
+	}
+	sawForegroundCommand := false
+	shellStablePolls := 0
+	for {
+		foregroundPGID, err := c.paneForegroundPGID(ctx, shell)
+		if err != nil {
+			return err
+		}
+		if foregroundPGID != shell.pgid {
+			sawForegroundCommand = true
+			shellStablePolls = 0
+		} else {
+			shellStablePolls++
+			if sawForegroundCommand && shellStablePolls >= returnRequired {
+				return nil
+			}
+			if !sawForegroundCommand && shellStablePolls >= required {
+				return nil
+			}
+		}
+		if err := c.waitPanePoll(ctx); err != nil {
+			return err
+		}
+	}
+}
+
+func (c Client) paneForegroundProcess(ctx context.Context, paneID string) (paneShell, string, error) {
+	const format = "#{pane_pid}\t#{pane_dead}"
+	out, err := c.runner.Run(ctx, "tmux", "display-message", "-p", "-t", paneID, format)
+	if err != nil {
+		return paneShell{}, "", commandError("read tmux pane process", out, err)
+	}
+	pid, dead, ok := strings.Cut(strings.TrimSpace(string(out)), "\t")
+	if !ok {
+		return paneShell{}, "", fmt.Errorf("read tmux pane process: unexpected output %q", strings.TrimSpace(string(out)))
+	}
+	if strings.TrimSpace(dead) == "1" {
+		return paneShell{}, "", fmt.Errorf("read tmux pane process: pane %s exited during startup", paneID)
+	}
+	pid = strings.TrimSpace(pid)
+	if pid == "" {
+		return paneShell{}, "", fmt.Errorf("read tmux pane process: pane %s has no process id", paneID)
+	}
+	processOut, err := c.runner.Run(ctx, "ps", "-o", "pgid=,tpgid=", "-p", pid)
+	if err != nil {
+		return paneShell{}, "", commandError("read tmux pane foreground process", processOut, err)
+	}
+	fields := strings.Fields(string(processOut))
+	if len(fields) != 2 {
+		return paneShell{}, "", fmt.Errorf("read tmux pane foreground process: unexpected output %q", strings.TrimSpace(string(processOut)))
+	}
+	return paneShell{paneID: paneID, pid: pid, pgid: fields[0]}, fields[1], nil
+}
+
+func (c Client) paneForegroundPGID(ctx context.Context, shell paneShell) (string, error) {
+	out, err := c.runner.Run(ctx, "ps", "-o", "tpgid=", "-p", shell.pid)
+	if err != nil {
+		return "", commandError("read tmux pane foreground process", out, err)
+	}
+	foregroundPGID := strings.TrimSpace(string(out))
+	if foregroundPGID == "" {
+		return "", fmt.Errorf("read tmux pane foreground process: pane %s has no foreground process group", shell.paneID)
+	}
+	return foregroundPGID, nil
+}
+
+func (c Client) waitPanePoll(ctx context.Context) error {
+	if c.panePollInterval <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(c.panePollInterval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func paneCommands(node sessionconfig.Node) []string {

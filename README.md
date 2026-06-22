@@ -843,8 +843,11 @@ Layout rules:
   `[[hooks.after_create_script]]` with `run = "ready.sh"` run those resolved
   scripts outside tmux in the selected workspace.
 - `command = ["make generate", "go test ./..."]` sends `make generate` and
-  then `go test ./...` as separate pane commands. `script` lists use the same
-  ordering after each script path is resolved.
+  then waits for the pane to return to its shell before sending
+  `go test ./...` as a separate pane command. `script` lists use the same
+  sequential ordering after each script path is resolved. Every non-final list
+  item must terminate; a persistent TUI or server command must be the final
+  item.
 - Pane `command` and `script` entries do not have per-kind conditions. They are
   pane startup commands, intended to be visible in the pane when they run.
 - Pane commands start only after all windows and panes have been created,
