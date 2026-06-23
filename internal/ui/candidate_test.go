@@ -2941,6 +2941,13 @@ func TestRenderTemplateParameterPickerUsesRadioBulletsAndBackLabel(t *testing.T)
 	if !strings.Contains(plain, "enter select") || !strings.Contains(plain, "esc back") {
 		t.Fatalf("parameter picker missing navigation footer:\n%s", plain)
 	}
+	if !strings.Contains(plain, "▌ ●   opencode") {
+		t.Fatalf("selected parameter option does not use the popup selection marker:\n%s", plain)
+	}
+	selectedChip := renderPopupChip("●", model.styles.selected, model.styles.selectedMatch, nil)
+	if !strings.Contains(view, selectedChip) {
+		t.Fatal("selected parameter chip does not use the selection bar style")
+	}
 }
 
 func TestOpenCandidateCreatesDuplicateWithNumberedLeafName(t *testing.T) {

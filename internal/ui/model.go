@@ -4569,9 +4569,9 @@ func renderTemplateParameterPicker(s styles, dialogs config.Dialogs, parameter s
 	if bodyWidth < 20 {
 		bodyWidth = 20
 	}
-	rowWidth := bodyWidth
-	if rowWidth < 1 {
-		rowWidth = 1
+	rowWidth := bodyWidth - 2
+	if rowWidth < 20 {
+		rowWidth = bodyWidth
 	}
 	if cursor < 0 {
 		cursor = 0
@@ -4594,18 +4594,13 @@ func renderTemplateParameterPicker(s styles, dialogs config.Dialogs, parameter s
 			optionWidth = 1
 		}
 		option = truncate(option, optionWidth)
-		textStyle := s.muted
-		chipStyle := s.chip
 		bullet := "○"
 		if selected {
-			textStyle = s.selected
-			chipStyle = s.selectedChip
 			bullet = "●"
 		}
-		chip := chipStyle.Render(" " + bullet + " ")
-		row := chip + textStyle.Render(strings.Repeat(" ", gapWidth)+option)
-		if selected {
-			row = padSelectedRow(row, rowWidth, s)
+		row := renderPopupLabeledRow(bullet, nil, option, nil, selected, false, s, rowWidth, chipWidth, gapWidth)
+		if rowWidth != bodyWidth {
+			row = renderPopupSelectionMarker(selected, s) + row + renderHelpScrollbar(optionIndex, 0, len(parameter.Options), len(parameter.Options), s)
 		}
 		b.WriteString(row)
 		b.WriteString("\n")
