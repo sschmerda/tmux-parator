@@ -626,6 +626,12 @@ prompt = "Editor"
 options = ["nvim", "vim"]
 default = "nvim"
 
+[[parameters]]
+name = "agent"
+prompt = "Coding agent"
+options = ["codex", "opencode", "none"]
+default = "codex"
+
 [variables]
 window_prefix = "{session_name}-work"
 
@@ -717,6 +723,16 @@ path = "."
 command = "git log --oneline -5"
 
 [[windows]]
+name = "agent"
+when = '{agent} != "none"'
+
+[windows.layout]
+type = "pane"
+name = "agent"
+path = "."
+command = "{agent}"
+
+[[windows]]
 name = "git"
 
 [windows.layout]
@@ -772,7 +788,9 @@ Session template fields:
 | `hooks.*.kinds` | hook table | Optional session kind list. When set, the hook runs only when the created session metadata kind matches one of the listed values such as `repo`, `subdir`, `path`, or `manual`. |
 | `windows.name` | window | Required tmux window name. |
 | `windows.focus` | window | Optional dot path to the pane made active within that window after layout creation, for example `main.editor`. It must resolve to a pane, not a layout group. Template-level `focus` still controls the final startup window and pane. |
+| `windows.when` | window | Optional interpolated `==` or `!=` condition. A false condition removes the window before session creation. |
 | `windows.layout.type` | layout node | Required node type: `pane`, `columns`, or `rows`. |
+| `windows.layout.when` | layout node | Optional interpolated `==` or `!=` condition. A false condition removes the pane or layout group. |
 | `windows.layout.name` | root pane | Required only when the window root layout is a single `pane`. Child pane names normally come from the parent `children` list. |
 | `windows.layout.path` | pane | Optional pane working directory. Relative paths are resolved under the selected workspace path. `.` or an empty value use the selected workspace path. |
 | `windows.layout.command` | pane | Optional command or command list sent to the pane followed by Enter. Lists are sent as individual commands in order. |
@@ -787,6 +805,17 @@ Layout rules:
   configure both fields in the same template.
 - `pane` is a leaf. It cannot define `sizes` or `children`.
 - `columns` splits panes horizontally; `rows` splits panes vertically.
+- Conditions are evaluated after parameters, variables, built-ins, and
+  `{env.NAME}` placeholders are resolved. For example,
+  `when = '{agent} != "none"'` creates the node only when the selected
+  `agent` parameter is not `none`, while
+  `when = '{session_kind} == "repo"'` limits it to repository sessions.
+- When a child is removed, its corresponding `sizes` weight is removed. A
+  group with no remaining children and a window with no remaining layout are
+  also removed.
+- Conditions are validated before tmux side effects. If they remove every
+  window or the configured template/window focus, creation fails with a
+  resolution error.
 - `sizes = [25, 50, 25]` means the middle child receives twice the space of
   either side child. `[1, 1, 1]` and `[33, 33, 33]` both mean equal thirds.
 - Terminal cells are integers, so exact percentages are rounded. Remainder

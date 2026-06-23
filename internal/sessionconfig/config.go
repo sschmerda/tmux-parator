@@ -48,12 +48,14 @@ type Hook struct {
 type Window struct {
 	Name   string
 	Focus  string
+	When   string
 	Layout Node
 }
 
 type Node struct {
 	Name        string
 	Type        string
+	When        string
 	Path        string
 	Command     string
 	Commands    []string
@@ -108,6 +110,7 @@ type rawHook struct {
 type rawWindow struct {
 	Name   string                 `toml:"name"`
 	Focus  string                 `toml:"focus"`
+	When   string                 `toml:"when"`
 	Layout map[string]interface{} `toml:"layout"`
 }
 
@@ -485,7 +488,11 @@ func normalizeWindow(raw rawWindow, configDir string) (Window, error) {
 	window := Window{
 		Name:   windowName,
 		Focus:  strings.TrimSpace(raw.Focus),
+		When:   strings.TrimSpace(raw.When),
 		Layout: layout,
+	}
+	if err := validateCondition(window.When); err != nil {
+		return Window{}, fmt.Errorf("when: %w", err)
 	}
 	if window.Focus != "" && !containsInterpolation(window.Focus) && !nodeContainsInterpolation(window.Layout) && !focusResolves(window.Focus, window.Layout) {
 		return Window{}, fmt.Errorf("focus %q does not resolve to a pane", window.Focus)
@@ -500,6 +507,13 @@ func normalizeNode(name string, raw map[string]interface{}, configDir string) (N
 	}
 	node.Type, _ = stringValue(raw, "type")
 	node.Type = strings.TrimSpace(node.Type)
+	node.When, _ = stringValue(raw, "when")
+	if _, exists := raw["when"]; exists && node.When == "" {
+		return Node{}, fmt.Errorf("layout %q: when must be a non-empty string", displayNodeName(node.Name))
+	}
+	if err := validateCondition(node.When); err != nil {
+		return Node{}, fmt.Errorf("layout %q: when: %w", displayNodeName(node.Name), err)
+	}
 	if node.Type == "" {
 		return Node{}, fmt.Errorf("layout %q: type is required", displayNodeName(node.Name))
 	}

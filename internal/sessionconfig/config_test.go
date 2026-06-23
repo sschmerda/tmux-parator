@@ -820,6 +820,70 @@ command_mode = "wrapper"
 	}
 }
 
+func TestLoadFileParsesWindowAndPaneConditions(t *testing.T) {
+	path := writeTemplateConfig(t, `
+id = "conditional"
+name = "Conditional"
+focus = "work.shell"
+
+[[windows]]
+name = "work"
+
+[windows.layout]
+type = "columns"
+sizes = [70, 30]
+children = ["shell", "agent"]
+
+[windows.layout.shell]
+type = "pane"
+
+[windows.layout.agent]
+type = "pane"
+when = '{agent} != "none"'
+
+[[windows]]
+name = "ci"
+when = '{env.CI} == "true"'
+
+[windows.layout]
+type = "pane"
+name = "logs"
+`)
+
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile() unexpected error: %v", err)
+	}
+	template := cfg.Templates[0]
+	if got := template.Windows[0].Layout.Children[1].When; got != `{agent} != "none"` {
+		t.Fatalf("pane when = %q", got)
+	}
+	if got := template.Windows[1].When; got != `{env.CI} == "true"` {
+		t.Fatalf("window when = %q", got)
+	}
+}
+
+func TestLoadFileRejectsInvalidCondition(t *testing.T) {
+	path := writeTemplateConfig(t, `
+id = "conditional"
+name = "Conditional"
+focus = "work.shell"
+
+[[windows]]
+name = "work"
+when = "{session_kind}"
+
+[windows.layout]
+type = "pane"
+name = "shell"
+`)
+
+	_, err := LoadFile(path)
+	if err == nil || !strings.Contains(err.Error(), "must contain an == or != comparison") {
+		t.Fatalf("LoadFile() error = %v, want invalid condition", err)
+	}
+}
+
 func TestLoadFileRejectsInvalidPaneCommandMode(t *testing.T) {
 	path := writeTemplateConfig(t, `
 id = "bad"

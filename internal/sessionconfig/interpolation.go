@@ -66,11 +66,14 @@ func Render(template Template, context RenderContext) (Template, error) {
 	if err != nil {
 		return Template{}, interpolationFieldError(template, "after_create hook", err)
 	}
-	rendered.Windows = make([]Window, len(template.Windows))
+	rendered.Windows = make([]Window, 0, len(template.Windows))
 	for i, window := range template.Windows {
-		rendered.Windows[i], err = renderWindow(window, values, context.Environment)
+		renderedWindow, include, err := renderWindow(window, values, context.Environment)
 		if err != nil {
 			return Template{}, interpolationFieldError(template, fmt.Sprintf("window %d", i+1), err)
+		}
+		if include {
+			rendered.Windows = append(rendered.Windows, renderedWindow)
 		}
 	}
 	if err := validateRenderedTemplate(rendered); err != nil {
@@ -214,50 +217,82 @@ func renderHooks(hooks []Hook, values map[string]string, environment map[string]
 	return rendered, nil
 }
 
-func renderWindow(window Window, values map[string]string, environment map[string]string) (Window, error) {
+func renderWindow(window Window, values map[string]string, environment map[string]string) (Window, bool, error) {
 	rendered := window
 	var err error
+	if rendered.When, err = interpolate(window.When, values, environment); err != nil {
+		return Window{}, false, fmt.Errorf("when: %w", err)
+	}
+	include, err := evaluateCondition(rendered.When)
+	if err != nil {
+		return Window{}, false, fmt.Errorf("when %q: %w", rendered.When, err)
+	}
+	if !include {
+		return Window{}, false, nil
+	}
 	if rendered.Name, err = interpolate(window.Name, values, environment); err != nil {
-		return Window{}, fmt.Errorf("name: %w", err)
+		return Window{}, false, fmt.Errorf("name: %w", err)
 	}
 	if rendered.Focus, err = interpolate(window.Focus, values, environment); err != nil {
-		return Window{}, fmt.Errorf("%q focus: %w", rendered.Name, err)
+		return Window{}, false, fmt.Errorf("%q focus: %w", rendered.Name, err)
 	}
-	if rendered.Layout, err = renderNode(window.Layout, values, environment); err != nil {
-		return Window{}, fmt.Errorf("%q layout: %w", rendered.Name, err)
+	var layoutIncluded bool
+	if rendered.Layout, layoutIncluded, err = renderNode(window.Layout, values, environment); err != nil {
+		return Window{}, false, fmt.Errorf("%q layout: %w", rendered.Name, err)
 	}
-	return rendered, nil
+	if !layoutIncluded {
+		return Window{}, false, nil
+	}
+	return rendered, true, nil
 }
 
-func renderNode(node Node, values map[string]string, environment map[string]string) (Node, error) {
+func renderNode(node Node, values map[string]string, environment map[string]string) (Node, bool, error) {
 	rendered := node
 	var err error
+	if rendered.When, err = interpolate(node.When, values, environment); err != nil {
+		return Node{}, false, fmt.Errorf("when: %w", err)
+	}
+	include, err := evaluateCondition(rendered.When)
+	if err != nil {
+		return Node{}, false, fmt.Errorf("when %q: %w", rendered.When, err)
+	}
+	if !include {
+		return Node{}, false, nil
+	}
 	if rendered.Name, err = interpolate(node.Name, values, environment); err != nil {
-		return Node{}, fmt.Errorf("name: %w", err)
+		return Node{}, false, fmt.Errorf("name: %w", err)
 	}
 	if rendered.Path, err = interpolate(node.Path, values, environment); err != nil {
-		return Node{}, fmt.Errorf("pane %q path: %w", rendered.Name, err)
+		return Node{}, false, fmt.Errorf("pane %q path: %w", rendered.Name, err)
 	}
 	rendered.Commands = make([]string, len(node.Commands))
 	for i, command := range node.Commands {
 		rendered.Commands[i], err = interpolate(command, values, environment)
 		if err != nil {
-			return Node{}, fmt.Errorf("pane %q command %d: %w", rendered.Name, i+1, err)
+			return Node{}, false, fmt.Errorf("pane %q command %d: %w", rendered.Name, i+1, err)
 		}
 	}
 	if len(rendered.Commands) > 0 {
 		rendered.Command = rendered.Commands[0]
 	} else if rendered.Command, err = interpolate(node.Command, values, environment); err != nil {
-		return Node{}, fmt.Errorf("pane %q command: %w", rendered.Name, err)
+		return Node{}, false, fmt.Errorf("pane %q command: %w", rendered.Name, err)
 	}
-	rendered.Children = make([]Node, len(node.Children))
+	rendered.Children = make([]Node, 0, len(node.Children))
+	rendered.Sizes = make([]int, 0, len(node.Sizes))
 	for i, child := range node.Children {
-		rendered.Children[i], err = renderNode(child, values, environment)
+		renderedChild, childIncluded, err := renderNode(child, values, environment)
 		if err != nil {
-			return Node{}, err
+			return Node{}, false, err
+		}
+		if childIncluded {
+			rendered.Children = append(rendered.Children, renderedChild)
+			rendered.Sizes = append(rendered.Sizes, node.Sizes[i])
 		}
 	}
-	return rendered, nil
+	if node.Type != "pane" && len(rendered.Children) == 0 {
+		return Node{}, false, nil
+	}
+	return rendered, true, nil
 }
 
 func interpolate(value string, values map[string]string, environment map[string]string) (string, error) {
@@ -319,7 +354,7 @@ func templateContainsStructuralInterpolation(template Template) bool {
 		return true
 	}
 	for _, window := range template.Windows {
-		if containsInterpolation(window.Name) || containsInterpolation(window.Focus) || nodeContainsInterpolation(window.Layout) {
+		if containsInterpolation(window.Name) || containsInterpolation(window.Focus) || containsInterpolation(window.When) || nodeContainsInterpolation(window.Layout) {
 			return true
 		}
 	}
@@ -327,7 +362,7 @@ func templateContainsStructuralInterpolation(template Template) bool {
 }
 
 func nodeContainsInterpolation(node Node) bool {
-	if containsInterpolation(node.Name) {
+	if containsInterpolation(node.Name) || containsInterpolation(node.When) {
 		return true
 	}
 	for _, child := range node.Children {
@@ -341,6 +376,9 @@ func nodeContainsInterpolation(node Node) bool {
 func validateRenderedTemplate(template Template) error {
 	if strings.TrimSpace(template.Focus) == "" {
 		return fmt.Errorf("focus is empty")
+	}
+	if len(template.Windows) == 0 {
+		return fmt.Errorf("conditions removed every window")
 	}
 	windowNames := make(map[string]bool, len(template.Windows))
 	for _, window := range template.Windows {
@@ -369,6 +407,12 @@ func validateRenderedNode(node Node) error {
 		return fmt.Errorf("pane name is empty")
 	}
 	childNames := make(map[string]bool, len(node.Children))
+	if node.Type != "pane" && len(node.Children) == 0 {
+		return fmt.Errorf("layout %q has no children after conditions", displayNodeName(node.Name))
+	}
+	if node.Type != "pane" && len(node.Sizes) != len(node.Children) {
+		return fmt.Errorf("layout %q sizes count %d does not match children count %d", displayNodeName(node.Name), len(node.Sizes), len(node.Children))
+	}
 	for _, child := range node.Children {
 		if strings.TrimSpace(child.Name) == "" {
 			return fmt.Errorf("child name is empty")
