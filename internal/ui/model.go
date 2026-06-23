@@ -822,8 +822,8 @@ func (m Model) updateTemplateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		path := m.templatePath
 		fallbackName := m.templateName
 		previous := m.templatePreviousMode
-		m.closeTemplatePicker()
 		if isNoTemplatePickerItem(template) {
+			m.closeTemplatePicker()
 			m.loading = true
 			if previous == modePathSearch {
 				m.stopPathStream()
@@ -833,6 +833,10 @@ func (m Model) updateTemplateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			metadata.BaseName = fallbackName
 			return m, m.createSessionWithMetadata(name, path, metadata)
 		}
+		if len(template.Parameters) > 0 {
+			return m.beginTemplateCreation(template, fallbackName, path, metadata, modeTemplatePicker)
+		}
+		m.closeTemplatePicker()
 		return m.beginTemplateCreation(template, fallbackName, path, metadata, previous)
 	case keyMatches(msg, m.keys.Browse.Up):
 		if m.templateCursor > 0 {
@@ -1309,7 +1313,19 @@ func (m Model) renderWithOverlay(content string) string {
 	}
 	if m.mode == modeTemplateParameter {
 		if parameter, ok := m.currentTemplateParameter(); ok {
-			base = placeOverlay(base, renderTemplateParameterPicker(m.styles, m.dialogs, parameter, m.parameterIndex, len(m.parameterTemplate.Parameters), m.parameterCursor, innerWidth, innerHeight), innerWidth, innerHeight)
+			base = placeOverlay(base, renderTemplateParameterPicker(
+				m.styles,
+				m.dialogs,
+				parameter,
+				m.parameterIndex,
+				len(m.parameterTemplate.Parameters),
+				m.parameterCursor,
+				keyListLabel(m.keys.Browse.OpenSelected),
+				keyListLabel(m.keys.Browse.Quit),
+				m.parameterPreviousMode == modeTemplatePicker,
+				innerWidth,
+				innerHeight,
+			), innerWidth, innerHeight)
 		}
 	}
 	if m.mode == modeCommands || (m.mode == modeHelp && m.previousMode == modeCommands) {
@@ -2905,6 +2921,18 @@ func (m Model) updateTemplateParameterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch {
 	case keyMatches(msg, m.keys.Browse.Quit):
+		if m.parameterIndex > 0 {
+			delete(m.parameterValues, parameter.Name)
+			m.parameterIndex--
+			previous := m.parameterTemplate.Parameters[m.parameterIndex]
+			m.parameterCursor = parameterSelectedIndex(previous, m.parameterValues)
+			return m, nil
+		}
+		if m.parameterPreviousMode == modeTemplatePicker {
+			m.clearTemplateParameters()
+			m.mode = modeTemplatePicker
+			return m, nil
+		}
 		previous := m.parameterPreviousMode
 		m.clearTemplateParameters()
 		if previous == modePathSearch {
@@ -2937,7 +2965,7 @@ func (m Model) updateTemplateParameterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.parameterValues[parameter.Name] = parameter.Options[m.parameterCursor]
 		m.parameterIndex++
 		if m.parameterIndex < len(m.parameterTemplate.Parameters) {
-			m.parameterCursor = parameterDefaultIndex(m.parameterTemplate.Parameters[m.parameterIndex])
+			m.parameterCursor = parameterSelectedIndex(m.parameterTemplate.Parameters[m.parameterIndex], m.parameterValues)
 			return m, nil
 		}
 		template, err := sessionconfig.WithParameterValues(m.parameterTemplate, m.parameterValues)
@@ -2945,7 +2973,9 @@ func (m Model) updateTemplateParameterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.notice = err
 			previous := m.parameterPreviousMode
 			m.clearTemplateParameters()
-			if previous == modePathSearch {
+			if previous == modeTemplatePicker {
+				m.mode = modeTemplatePicker
+			} else if previous == modePathSearch {
 				m.mode = modePathSearch
 			} else {
 				m.mode = modeBrowse
@@ -2957,6 +2987,10 @@ func (m Model) updateTemplateParameterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		metadata := m.parameterMetadata
 		previous := m.parameterPreviousMode
 		m.clearTemplateParameters()
+		if previous == modeTemplatePicker {
+			previous = m.templatePreviousMode
+			m.closeTemplatePicker()
+		}
 		return m.finishTemplateCreation(template, fallback, path, metadata, previous)
 	}
 	return m, nil
@@ -2987,6 +3021,17 @@ func parameterDefaultIndex(parameter sessionconfig.Parameter) int {
 		}
 	}
 	return 0
+}
+
+func parameterSelectedIndex(parameter sessionconfig.Parameter, values map[string]string) int {
+	if value, ok := values[parameter.Name]; ok {
+		for i, option := range parameter.Options {
+			if option == value {
+				return i
+			}
+		}
+	}
+	return parameterDefaultIndex(parameter)
 }
 
 func (m Model) hasSession(name string) bool {
@@ -4510,7 +4555,7 @@ func renderTemplatePicker(s styles, dialogs config.Dialogs, keys config.KeyBindi
 	return lipgloss.JoinVertical(lipgloss.Left, mainBox, descriptionBox, footer)
 }
 
-func renderTemplateParameterPicker(s styles, dialogs config.Dialogs, parameter sessionconfig.Parameter, index int, total int, cursor int, appWidth int, appHeight int) string {
+func renderTemplateParameterPicker(s styles, dialogs config.Dialogs, parameter sessionconfig.Parameter, index int, total int, cursor int, selectKey string, backKey string, returnsToTemplatePicker bool, appWidth int, appHeight int) string {
 	frame := panelDialogFrame(dialogs, appWidth, appHeight)
 	width := frame.width
 	contentWidth := width - 2
@@ -4519,9 +4564,9 @@ func renderTemplateParameterPicker(s styles, dialogs config.Dialogs, parameter s
 	if bodyWidth < 20 {
 		bodyWidth = 20
 	}
-	rowWidth := bodyWidth - 2
-	if rowWidth < 20 {
-		rowWidth = bodyWidth
+	rowWidth := bodyWidth
+	if rowWidth < 1 {
+		rowWidth = 1
 	}
 	if cursor < 0 {
 		cursor = 0
@@ -4535,20 +4580,43 @@ func renderTemplateParameterPicker(s styles, dialogs config.Dialogs, parameter s
 	b.WriteString("\n\n")
 	for optionIndex, option := range parameter.Options {
 		selected := optionIndex == cursor
-		row := truncate(option, rowWidth)
-		if selected {
-			row = padSelectedRow(s.selected.Render(row), rowWidth, s)
-		} else {
-			row = s.popupBody.Render(row)
+		const (
+			chipWidth = 3
+			gapWidth  = 2
+		)
+		optionWidth := rowWidth - chipWidth - gapWidth
+		if optionWidth < 1 {
+			optionWidth = 1
 		}
-		if rowWidth != bodyWidth {
-			row = renderPopupSelectionMarker(selected, s) + row + s.popupBody.Render(" ")
+		option = truncate(option, optionWidth)
+		textStyle := s.muted
+		chipStyle := s.chip
+		bullet := "○"
+		if selected {
+			textStyle = s.selected
+			chipStyle = s.selectedChip
+			bullet = "●"
+		}
+		chip := chipStyle.Render(" " + bullet + " ")
+		row := chip + textStyle.Render(strings.Repeat(" ", gapWidth)+option)
+		if selected {
+			row = padSelectedRow(row, rowWidth, s)
 		}
 		b.WriteString(row)
 		b.WriteString("\n")
 	}
 	position := fmt.Sprintf("%d/%d", index+1, total)
-	return renderTitledBox("Template Parameter", position, b.String(), width, panelMainBoxHeight(frame), horizontalPadding, s)
+	mainBox := renderTitledBox("Template Parameter", position, b.String(), width, panelMainBoxHeight(frame), horizontalPadding, s)
+	backAction := "cancel"
+	if index > 0 || returnsToTemplatePicker {
+		backAction = "back"
+	}
+	footer := renderHelpDescription([]string{
+		s.popupAccent.Render(selectKey) + s.popupMuted.Render(" select") +
+			s.popupBody.Render("   ") +
+			s.popupAccent.Render(backKey) + s.popupMuted.Render(" "+backAction),
+	}, s, width)
+	return lipgloss.JoinVertical(lipgloss.Left, mainBox, footer)
 }
 
 func renderTemplateRow(template sessionconfig.Template, query string, selected bool, s styles, width int) string {

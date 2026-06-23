@@ -2865,7 +2865,7 @@ func TestSuccessfulTemplateCreationQuitsWithoutSecondSwitch(t *testing.T) {
 	}
 }
 
-func TestTemplateParametersAdvanceAndCanBeCancelled(t *testing.T) {
+func TestTemplateParametersAdvanceGoBackAndCanBeCancelled(t *testing.T) {
 	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
 	template := testTemplate("tools", "Tools")
 	template.Parameters = []sessionconfig.Parameter{
@@ -2875,6 +2875,8 @@ func TestTemplateParametersAdvanceAndCanBeCancelled(t *testing.T) {
 
 	updated, _ := model.beginTemplateCreation(template, "repo", "/tmp/repo", tmux.SessionMetadata{}, modeBrowse)
 	model = updated.(Model)
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
 	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
 	if cmd != nil || model.parameterIndex != 1 || model.parameterCursor != 0 {
@@ -2882,8 +2884,62 @@ func TestTemplateParametersAdvanceAndCanBeCancelled(t *testing.T) {
 	}
 	updated, cmd = model.updateKey(tea.KeyMsg{Type: tea.KeyEsc})
 	model = updated.(Model)
+	if cmd != nil || model.mode != modeTemplateParameter || model.parameterIndex != 0 || model.parameterCursor != 1 {
+		t.Fatalf("back state = mode %v index %d cursor %d cmd %#v, want first parameter selection restored", model.mode, model.parameterIndex, model.parameterCursor, cmd)
+	}
+	updated, cmd = model.updateKey(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
 	if cmd != nil || model.mode != modeBrowse || len(model.parameterTemplate.Parameters) != 0 {
 		t.Fatalf("cancel state = mode %v template %#v cmd %#v", model.mode, model.parameterTemplate, cmd)
+	}
+}
+
+func TestTemplateParameterCancelReturnsToTemplatePicker(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	template := testTemplate("tools", "Tools")
+	template.Parameters = []sessionconfig.Parameter{{
+		Name:    "agent",
+		Prompt:  "Agent",
+		Options: []string{"codex", "opencode"},
+		Default: "codex",
+	}}
+	model.mode = modeTemplatePicker
+	model.templateFiltered = []sessionconfig.Template{template}
+	model.templateAvailable = []sessionconfig.Template{template}
+	model.templatePath = "/tmp/repo"
+	model.templateName = "repo"
+	model.templatePreviousMode = modeBrowse
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd != nil || model.mode != modeTemplateParameter {
+		t.Fatalf("template selection state = mode %v cmd %#v, want parameter picker", model.mode, cmd)
+	}
+
+	updated, cmd = model.updateKey(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+	if cmd != nil || model.mode != modeTemplatePicker {
+		t.Fatalf("parameter cancel state = mode %v cmd %#v, want template picker", model.mode, cmd)
+	}
+	if model.templatePath != "/tmp/repo" || len(model.templateFiltered) != 1 || model.templateFiltered[0].ID != "tools" {
+		t.Fatalf("template picker state was not preserved: %#v", model)
+	}
+}
+
+func TestRenderTemplateParameterPickerUsesRadioBulletsAndBackLabel(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	parameter := sessionconfig.Parameter{
+		Prompt:  "Coding agent",
+		Options: []string{"codex", "opencode", "none"},
+	}
+
+	view := renderTemplateParameterPicker(model.styles, model.dialogs, parameter, 1, 2, 1, "enter", "esc", true, 100, 35)
+	plain := ansi.Strip(view)
+	if !strings.Contains(plain, "○   codex") || !strings.Contains(plain, "●   opencode") || !strings.Contains(plain, "○   none") {
+		t.Fatalf("parameter picker missing radio bullets:\n%s", plain)
+	}
+	if !strings.Contains(plain, "enter select") || !strings.Contains(plain, "esc back") {
+		t.Fatalf("parameter picker missing navigation footer:\n%s", plain)
 	}
 }
 
