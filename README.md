@@ -842,12 +842,17 @@ Layout rules:
 - `[[hooks.before_create_script]]` with `run = "setup.sh"` and
   `[[hooks.after_create_script]]` with `run = "ready.sh"` run those resolved
   scripts outside tmux in the selected workspace.
-- `command = ["make generate", "go test ./..."]` sends `make generate` and
-  then waits for the pane to return to its shell before sending
-  `go test ./...` as a separate pane command. `script` lists use the same
-  sequential ordering after each script path is resolved. Every non-final list
-  item must terminate; a persistent TUI or server command must be the final
-  item.
+- `command = ["make generate", "go test ./..."]` runs each item separately.
+  `script` lists use the same sequential ordering after each script path is
+  resolved. In the default `interactive` mode, tmux-parator queues a detached
+  pane-local sequence after the session layout and focus are ready. Session
+  switching does not wait for those commands. Each configured command remains
+  visible and later items wait for control to return to the pane shell, but
+  failures are best-effort and do not roll back the session. In `wrapper` mode,
+  every non-final item must exit successfully; a failure aborts creation,
+  prevents later items from starting, and rolls back the partial session.
+  Every non-final item must terminate, and a persistent TUI or server command
+  must be final. The final item remains asynchronous in both modes.
 - Pane `command` and `script` entries do not have per-kind conditions. They are
   pane startup commands, intended to be visible in the pane when they run.
 - Pane commands start only after all windows and panes have been created,

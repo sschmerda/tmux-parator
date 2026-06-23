@@ -237,11 +237,8 @@ func TestNewSessionWithLayoutCreatesNestedNamedChildLayout(t *testing.T) {
 	if hasCallPrefix(runner.calls, []string{"tmux", "respawn-pane", "-k", "-t", "%2"}) {
 		t.Fatalf("runner calls respawned interactive pane: %#v", runner.calls)
 	}
-	if !hasCall(runner.calls, []string{"tmux", "send-keys", "-t", "%2", "-l", "nvim ."}) {
-		t.Fatalf("runner calls missing typed nvim command: %#v", runner.calls)
-	}
-	if !hasCall(runner.calls, []string{"tmux", "send-keys", "-t", "%2", "C-m"}) {
-		t.Fatalf("runner calls missing nvim enter key: %#v", runner.calls)
+	if !hasQueuedPaneCommand(runner.calls, "%2", "nvim .") {
+		t.Fatalf("runner calls missing queued nvim command: %#v", runner.calls)
 	}
 	if !hasCall(runner.calls, []string{"tmux", "display-message", "-p", "-t", "%1", "#{window_width} #{window_height}"}) {
 		t.Fatalf("runner calls missing size probe after respawn: %#v", runner.calls)
@@ -265,11 +262,12 @@ func TestNewSessionWithLayoutCreatesNestedNamedChildLayout(t *testing.T) {
 		t.Fatalf("final focus pane was not selected after first window: %#v", runner.calls)
 	}
 	passthroughCall := []string{"tmux", "set-option", "-p", "-F", "-t", "%2", "allow-passthrough", "#{?#{==:#{allow-passthrough},all},on,#{allow-passthrough}}"}
-	if !callAppearsAfter(runner.calls, []string{"tmux", "send-keys", "-t", "%2", "-l", "nvim ."}, passthroughCall) {
-		t.Fatalf("pane command started before restricting invisible passthrough: %#v", runner.calls)
+	queueCall := queuedPaneCall(runner.calls, "%2")
+	if queueCall == nil || !callAppearsAfter(runner.calls, queueCall, passthroughCall) {
+		t.Fatalf("pane command was queued before restricting invisible passthrough: %#v", runner.calls)
 	}
-	if !callAppearsAfter(runner.calls, []string{"tmux", "select-window", "-t", "@1"}, []string{"tmux", "send-keys", "-t", "%2", "C-m"}) {
-		t.Fatalf("final focus was selected before pane startup completed: %#v", runner.calls)
+	if !callAppearsAfter(runner.calls, queueCall, []string{"tmux", "select-window", "-t", "@1"}) {
+		t.Fatalf("pane command was queued before final focus selection: %#v", runner.calls)
 	}
 }
 
@@ -303,17 +301,11 @@ func TestNewSessionWithLayoutCreatesMultipleWindows(t *testing.T) {
 		hasCallPrefix(runner.calls, []string{"tmux", "respawn-pane", "-k", "-t", "%2"}) {
 		t.Fatalf("runner calls respawned interactive panes: %#v", runner.calls)
 	}
-	if !hasCall(runner.calls, []string{"tmux", "send-keys", "-t", "%1", "-l", "nvim ."}) {
-		t.Fatalf("runner calls missing typed nvim command: %#v", runner.calls)
+	if !hasQueuedPaneCommand(runner.calls, "%1", "nvim .") {
+		t.Fatalf("runner calls missing queued nvim command: %#v", runner.calls)
 	}
-	if !hasCall(runner.calls, []string{"tmux", "send-keys", "-t", "%1", "C-m"}) {
-		t.Fatalf("runner calls missing nvim enter key: %#v", runner.calls)
-	}
-	if !hasCall(runner.calls, []string{"tmux", "send-keys", "-t", "%2", "-l", "lazygit"}) {
-		t.Fatalf("runner calls missing typed lazygit command: %#v", runner.calls)
-	}
-	if !hasCall(runner.calls, []string{"tmux", "send-keys", "-t", "%2", "C-m"}) {
-		t.Fatalf("runner calls missing lazygit enter key: %#v", runner.calls)
+	if !hasQueuedPaneCommand(runner.calls, "%2", "lazygit") {
+		t.Fatalf("runner calls missing queued lazygit command: %#v", runner.calls)
 	}
 	if !hasCall(runner.calls, []string{"tmux", "select-window", "-t", "@2"}) ||
 		!hasCall(runner.calls, []string{"tmux", "select-pane", "-t", "%2"}) {
@@ -325,8 +317,9 @@ func TestNewSessionWithLayoutCreatesMultipleWindows(t *testing.T) {
 			t.Fatalf("runner calls did not restrict invisible passthrough for %s: %#v", paneID, runner.calls)
 		}
 	}
-	if !callAppearsAfter(runner.calls, []string{"tmux", "select-window", "-t", "@2"}, []string{"tmux", "send-keys", "-t", "%2", "C-m"}) {
-		t.Fatalf("final focus was not selected after pane startup: %#v", runner.calls)
+	queueCall := queuedPaneCall(runner.calls, "%2")
+	if queueCall == nil || !callAppearsAfter(runner.calls, queueCall, []string{"tmux", "select-window", "-t", "@2"}) {
+		t.Fatalf("pane startup was not queued after final focus selection: %#v", runner.calls)
 	}
 }
 
@@ -379,10 +372,39 @@ func TestNewSessionWithLayoutWrapperCommandModeRespawnsShellCommand(t *testing.T
 	}
 }
 
+func TestNewSessionWithLayoutWrapperModeAbortsAfterFailedNonFinalCommand(t *testing.T) {
+	runner := &recordingRunner{
+		outputs:             []string{"@1 %1\n"},
+		paneCommandStatuses: []string{"1\terror:0:7\n"},
+	}
+	client := newTestClient(runner)
+	template := sessionconfig.Template{
+		ID:    "wrapper",
+		Name:  "Wrapper",
+		Focus: "work.setup",
+		Windows: []sessionconfig.Window{{
+			Name: "work",
+			Layout: sessionconfig.Node{
+				Name:        "setup",
+				Type:        "pane",
+				CommandMode: sessionconfig.CommandModeWrapper,
+				Commands:    []string{"make generate", "yazi"},
+			},
+		}},
+	}
+
+	err := client.NewSessionWithLayout(context.Background(), "repo", "/Users/me/repo", tmuxMetadata(), template)
+	if err == nil || !strings.Contains(err.Error(), `run tmux pane command "make generate": exit status 7`) {
+		t.Fatalf("NewSessionWithLayout() error = %v, want failed wrapper command", err)
+	}
+	if !hasCall(runner.calls, []string{"tmux", "kill-session", "-t", "=repo:"}) {
+		t.Fatalf("runner calls missing rollback after wrapper command failure: %#v", runner.calls)
+	}
+}
+
 func TestNewSessionWithLayoutSendsPaneCommandListIndividually(t *testing.T) {
 	runner := &recordingRunner{
-		outputs:    []string{"@1 %1\n"},
-		paneStates: []string{"100 100\n", "100 100\n", "200\n", "100\n", "100\n"},
+		outputs: []string{"@1 %1\n"},
 	}
 	client := newTestClient(runner)
 	template := sessionconfig.Template{
@@ -406,26 +428,27 @@ func TestNewSessionWithLayoutSendsPaneCommandListIndividually(t *testing.T) {
 		t.Fatalf("NewSessionWithLayout() unexpected error: %v", err)
 	}
 
-	if !hasCall(runner.calls, []string{"tmux", "send-keys", "-t", "%1", "-l", "make generate"}) {
-		t.Fatalf("runner calls missing first typed command: %#v", runner.calls)
+	if !hasQueuedPaneCommand(runner.calls, "%1", "make generate") {
+		t.Fatalf("runner calls missing first queued command: %#v", runner.calls)
 	}
-	if !hasCall(runner.calls, []string{"tmux", "send-keys", "-t", "%1", "-l", "go test ./..."}) {
-		t.Fatalf("runner calls missing second typed command: %#v", runner.calls)
+	if !hasQueuedPaneCommand(runner.calls, "%1", "go test ./...") {
+		t.Fatalf("runner calls missing second queued command: %#v", runner.calls)
 	}
-	if hasCall(runner.calls, []string{"tmux", "send-keys", "-t", "%1", "-l", "make generate && go test ./..."}) {
+	queueCall := queuedPaneCall(runner.calls, "%1")
+	if queueCall == nil || !strings.Contains(queueCall[3], "wait_for_command || exit 0") {
+		t.Fatalf("runner calls missing asynchronous command sequencing: %#v", runner.calls)
+	}
+	if !strings.Contains(queueCall[3], "'##{pane_pid}'") {
+		t.Fatalf("runner calls did not preserve deferred pane pid lookup: %#v", runner.calls)
+	}
+	if strings.Contains(queueCall[3], "make generate && go test ./...") {
 		t.Fatalf("runner calls chained pane commands: %#v", runner.calls)
-	}
-	firstEnter := []string{"tmux", "send-keys", "-t", "%1", "C-m"}
-	secondCommand := []string{"tmux", "send-keys", "-t", "%1", "-l", "go test ./..."}
-	if !paneStateReadsBetween(runner.calls, firstEnter, secondCommand, 3) {
-		t.Fatalf("second command was sent before the first returned to the shell: %#v", runner.calls)
 	}
 }
 
 func TestNewSessionWithLayoutDoesNotWaitForFinalPaneCommand(t *testing.T) {
 	runner := &recordingRunner{
-		outputs:    []string{"@1 %1\n"},
-		paneStates: []string{"100 100\n", "100 100\n"},
+		outputs: []string{"@1 %1\n"},
 	}
 	client := newTestClient(runner)
 	template := sessionconfig.Template{
@@ -442,35 +465,12 @@ func TestNewSessionWithLayoutDoesNotWaitForFinalPaneCommand(t *testing.T) {
 		t.Fatalf("NewSessionWithLayout() unexpected error: %v", err)
 	}
 
-	enter := callIndex(runner.calls, []string{"tmux", "send-keys", "-t", "%1", "C-m"})
-	if enter < 0 {
-		t.Fatalf("runner calls missing final command Enter: %#v", runner.calls)
+	queueCall := queuedPaneCall(runner.calls, "%1")
+	if queueCall == nil || !strings.Contains(queueCall[3], "opencode") {
+		t.Fatalf("runner calls missing queued final command: %#v", runner.calls)
 	}
-	for _, call := range runner.calls[enter+1:] {
-		if isProcessGroupRead(call) {
-			t.Fatalf("final command unexpectedly waited for completion: %#v", runner.calls)
-		}
-	}
-}
-
-func TestWaitForPaneCommandHandlesFastCommandWithoutObservedTransition(t *testing.T) {
-	runner := &recordingRunner{
-		paneStates: []string{"100\n", "100\n", "100\n"},
-	}
-	client := newTestClient(runner)
-
-	if err := client.waitForPaneCommand(context.Background(), paneShell{paneID: "%1", pid: "10", pgid: "100"}); err != nil {
-		t.Fatalf("waitForPaneCommand() unexpected error: %v", err)
-	}
-
-	stateReads := 0
-	for _, call := range runner.calls {
-		if isProcessGroupRead(call) {
-			stateReads++
-		}
-	}
-	if stateReads != client.paneCommandStablePolls {
-		t.Fatalf("pane state reads = %d, want %d: %#v", stateReads, client.paneCommandStablePolls, runner.calls)
+	if strings.Count(queueCall[3], "wait_for_command || exit 0") != 0 {
+		t.Fatalf("final command unexpectedly waited for completion: %#v", runner.calls)
 	}
 }
 
@@ -491,9 +491,9 @@ func TestNewSessionWithLayoutAndSwitchSwitchesAfterStartingCommandsAndSelectingF
 		t.Fatalf("NewSessionWithLayoutAndSwitch() error = %v", err)
 	}
 	switchCall := []string{"tmux", "switch-client", "-t", "=repo:"}
-	startCall := []string{"tmux", "send-keys", "-t", "%2", "-l", "opencode"}
-	if !callAppearsAfter(runner.calls, switchCall, startCall) {
-		t.Fatalf("client switched before pane command startup: %#v", runner.calls)
+	queueCall := queuedPaneCall(runner.calls, "%2")
+	if queueCall == nil || !callAppearsAfter(runner.calls, switchCall, queueCall) {
+		t.Fatalf("client switched before pane command queueing: %#v", runner.calls)
 	}
 	if hasCall(runner.calls, []string{"tmux", "select-window", "-t", "%2"}) ||
 		hasCall(runner.calls, []string{"tmux", "select-pane", "-t", "%2"}) {
@@ -542,9 +542,9 @@ func TestNewSessionWithLayoutRunsTemplateHooksAroundCreate(t *testing.T) {
 	if !callAppearsAfter(runner.calls, afterCall, metadataCall) {
 		t.Fatalf("after_create hook did not run after metadata: %#v", runner.calls)
 	}
-	commandCall := []string{"tmux", "send-keys", "-t", "%1", "-l", "nvim ."}
-	if !callAppearsAfter(runner.calls, commandCall, afterCall) {
-		t.Fatalf("pane command did not run after after_create hook: %#v", runner.calls)
+	queueCall := queuedPaneCall(runner.calls, "%1")
+	if queueCall == nil || !callAppearsAfter(runner.calls, queueCall, afterCall) {
+		t.Fatalf("pane command was not queued after after_create hook: %#v", runner.calls)
 	}
 }
 
@@ -861,18 +861,16 @@ func TestListSessionsRequestsPaneCurrentPath(t *testing.T) {
 }
 
 type recordingRunner struct {
-	calls        [][]string
-	outputs      []string
-	paneStates   []string
-	errors       []error
-	errorsByCall map[string]error
+	calls               [][]string
+	outputs             []string
+	paneCommandStatuses []string
+	errors              []error
+	errorsByCall        map[string]error
 }
 
 func newTestClient(runner Runner) Client {
 	client := NewClient(runner)
 	client.panePollInterval = 0
-	client.paneReadyStablePolls = 2
-	client.paneCommandStablePolls = 3
 	return client
 }
 
@@ -890,19 +888,13 @@ func (r *recordingRunner) Run(_ context.Context, name string, args ...string) ([
 		r.outputs = r.outputs[1:]
 		return []byte(out), nil
 	}
-	if isPaneProcessRead(call) {
-		return []byte("10\t0\n"), nil
-	}
-	if isProcessGroupRead(call) {
-		if len(r.paneStates) > 0 {
-			out := r.paneStates[0]
-			r.paneStates = r.paneStates[1:]
+	if isPaneCommandStatusRead(call) {
+		if len(r.paneCommandStatuses) > 0 {
+			out := r.paneCommandStatuses[0]
+			r.paneCommandStatuses = r.paneCommandStatuses[1:]
 			return []byte(out), nil
 		}
-		if containsArg(call, "pgid=,tpgid=") {
-			return []byte("100 100\n"), nil
-		}
-		return []byte("100\n"), nil
+		return []byte("0\t0\n"), nil
 	}
 	if len(args) > 0 && args[0] == "display-message" {
 		return []byte("120 40\n"), nil
@@ -974,19 +966,24 @@ func callAppearsAfter(calls [][]string, call []string, previous []string) bool {
 	return false
 }
 
-func paneStateReadsBetween(calls [][]string, first []string, second []string, minimum int) bool {
-	firstIndex := callIndex(calls, first)
-	secondIndex := callIndex(calls, second)
-	if firstIndex < 0 || secondIndex <= firstIndex {
-		return false
-	}
-	count := 0
-	for _, call := range calls[firstIndex+1 : secondIndex] {
-		if isProcessGroupRead(call) {
-			count++
+func queuedPaneCall(calls [][]string, paneID string) []string {
+	paneAssignment := "pane=" + shellQuote(paneID)
+	for _, call := range calls {
+		if len(call) == 4 &&
+			reflect.DeepEqual(call[:3], []string{"tmux", "run-shell", "-b"}) &&
+			strings.HasPrefix(call[3], paneAssignment+"\n") {
+			return call
 		}
 	}
-	return count >= minimum
+	return nil
+}
+
+func hasQueuedPaneCommand(calls [][]string, paneID string, command string) bool {
+	call := queuedPaneCall(calls, paneID)
+	if call == nil {
+		return false
+	}
+	return strings.Contains(call[3], "tmux send-keys -t \"$pane\" -l "+shellQuote(command))
 }
 
 func callIndex(calls [][]string, want []string) int {
@@ -998,21 +995,13 @@ func callIndex(calls [][]string, want []string) int {
 	return -1
 }
 
-func isPaneProcessRead(call []string) bool {
+func isPaneCommandStatusRead(call []string) bool {
 	return len(call) == 6 &&
 		call[0] == "tmux" &&
 		call[1] == "display-message" &&
 		call[2] == "-p" &&
 		call[3] == "-t" &&
-		call[5] == "#{pane_pid}\t#{pane_dead}"
-}
-
-func isProcessGroupRead(call []string) bool {
-	return len(call) >= 5 &&
-		call[0] == "ps" &&
-		call[1] == "-o" &&
-		(call[2] == "pgid=,tpgid=" || call[2] == "tpgid=") &&
-		call[3] == "-p"
+		call[5] == "#{pane_dead}\t#{@tmux-parator.command-status}"
 }
 
 func hasCallStartingWith(calls [][]string, prefix string) bool {
