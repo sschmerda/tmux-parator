@@ -3607,6 +3607,175 @@ func TestTemplateRowShowsConfiguredChipAndFuzzyHighlights(t *testing.T) {
 	}
 }
 
+func TestSelectedTemplateChipIsAdjacentToSelectionMarker(t *testing.T) {
+	template := testTemplate("repo", "Repository")
+	template.Chip = "rp"
+	styles := newStyles(theme.Default())
+
+	row := ansi.Strip(
+		renderPopupSelectionMarker(true, styles) +
+			renderTemplateRow(template, "", true, styles, 80),
+	)
+	if !strings.HasPrefix(row, "▌ rp ") {
+		t.Fatalf("selected template row = %q, want chip adjacent to selection marker", row)
+	}
+	renderedChip := renderPopupChip("rp", styles.selected, styles.selectedMatch, nil)
+	if !strings.Contains(renderTemplateRow(template, "", true, styles, 80), renderedChip) {
+		t.Fatal("selected template chip does not use the selection bar style")
+	}
+}
+
+func TestCommandAndHelpHotkeysUseSelectionBarChips(t *testing.T) {
+	styles := newStyles(theme.Default())
+
+	commandKey := "<enter>"
+	commandRow := renderCommandRow(commandMatch{
+		item: commandItem{Title: "Open", Key: commandKey, Enabled: true},
+	}, true, styles, 80)
+	selectedCommandChip := renderPopupChip(commandKey, styles.selected, styles.selectedMatch, nil)
+	if !strings.Contains(commandRow, selectedCommandChip) {
+		t.Fatal("selected command hotkey does not use the selection bar style")
+	}
+	if got := ansi.Strip(renderPopupSelectionMarker(true, styles) + commandRow); !strings.HasPrefix(got, "▌ <enter> ") {
+		t.Fatalf("selected command row = %q, want hotkey chip adjacent to selection marker", got)
+	}
+
+	helpKey := "<c-?>"
+	helpRow := renderHelpRow(helpMatch{
+		item: helpItem{Key: helpKey, Action: "show help"},
+	}, true, styles, 80)
+	selectedHelpChip := renderPopupChip(helpKey, styles.selected, styles.selectedMatch, nil)
+	if !strings.Contains(helpRow, selectedHelpChip) {
+		t.Fatal("selected help hotkey does not use the selection bar style")
+	}
+	if got := ansi.Strip(renderPopupSelectionMarker(true, styles) + helpRow); !strings.HasPrefix(got, "▌ <c-?> ") {
+		t.Fatalf("selected help row = %q, want hotkey chip adjacent to selection marker", got)
+	}
+}
+
+func TestCommandAndHelpHotkeysUseChipStyleWhenNotSelected(t *testing.T) {
+	styles := newStyles(theme.Default())
+
+	commandKey := "<enter>"
+	commandRow := renderCommandRow(commandMatch{
+		item: commandItem{Title: "Open", Key: commandKey, Enabled: true},
+	}, false, styles, 80)
+	commandChip := renderPopupChip(
+		commandKey,
+		styles.chip,
+		styles.match.Copy().Background(styles.chip.GetBackground()),
+		nil,
+	)
+	if !strings.Contains(commandRow, commandChip) {
+		t.Fatal("command hotkey does not use the chip style")
+	}
+
+	helpKey := "<c-?>"
+	helpRow := renderHelpRow(helpMatch{
+		item: helpItem{Key: helpKey, Action: "show help"},
+	}, false, styles, 80)
+	helpChip := renderPopupChip(
+		helpKey,
+		styles.chip,
+		styles.match.Copy().Background(styles.chip.GetBackground()),
+		nil,
+	)
+	if !strings.Contains(helpRow, helpChip) {
+		t.Fatal("help hotkey does not use the chip style")
+	}
+}
+
+func TestCommandAndHelpHotkeyChipsShowCombinedBindingsInFull(t *testing.T) {
+	styles := newStyles(theme.Default())
+
+	commandKey := "<esc> / <c-g>"
+	commandRow := ansi.Strip(renderCommandRow(commandMatch{
+		item: commandItem{Title: "Close commands", Key: commandKey, Enabled: true},
+	}, false, styles, 80))
+	if !strings.Contains(commandRow, commandKey) {
+		t.Fatalf("command row = %q, want full hotkey %q", commandRow, commandKey)
+	}
+
+	helpKey := "<esc> / <c-?>"
+	helpRow := ansi.Strip(renderHelpRow(helpMatch{
+		item: helpItem{Key: helpKey, Action: "close help"},
+	}, false, styles, 80))
+	if !strings.Contains(helpRow, helpKey) {
+		t.Fatalf("help row = %q, want full hotkey %q", helpRow, helpKey)
+	}
+}
+
+func TestCommandAndHelpPopupsShowHelpHotkey(t *testing.T) {
+	styles := newStyles(theme.Default())
+	dialogs := config.Dialogs{Panel: config.DialogSize{Width: 88, Height: 0}}
+	keys := config.Default().UI.Keys
+	const helpKey = "<c-?>"
+	commandMatches := make([]commandMatch, 0, len(browseCommandSpecsFor(keys)))
+	for _, spec := range browseCommandSpecsFor(keys) {
+		commandMatches = append(commandMatches, commandMatch{item: commandItemFromSpec(spec, true, "")})
+	}
+
+	for _, test := range []struct {
+		name  string
+		panel string
+	}{
+		{
+			name: "browse commands",
+			panel: renderCommandPalette(
+				styles,
+				dialogs,
+				commandMatches,
+				"",
+				0,
+				0,
+				120,
+				40,
+			),
+		},
+		{
+			name:  "browse help",
+			panel: renderHelpPanelWithKeys(styles, dialogs, keys, modeBrowse, "", 0, 0, 120, 40),
+		},
+		{
+			name:  "command help",
+			panel: renderHelpPanelWithKeys(styles, dialogs, keys, modeCommands, "", 0, 0, 120, 40),
+		},
+		{
+			name:  "path help",
+			panel: renderHelpPanelWithKeys(styles, dialogs, keys, modePathSearch, "", 0, 0, 120, 40),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if !strings.Contains(ansi.Strip(test.panel), helpKey) {
+				t.Fatalf("popup does not show help hotkey %q:\n%s", helpKey, ansi.Strip(test.panel))
+			}
+		})
+	}
+}
+
+func TestCommandAndHelpRowsShowConfiguredHotkeysInFull(t *testing.T) {
+	styles := newStyles(theme.Default())
+	keys := config.Default().UI.Keys
+
+	for _, spec := range append(browseCommandSpecsFor(keys), pathSearchCommandSpecsFor(keys)...) {
+		row := ansi.Strip(renderCommandRow(commandMatch{
+			item: commandItemFromSpec(spec, true, ""),
+		}, false, styles, 100))
+		if !strings.Contains(row, spec.Key) {
+			t.Fatalf("command row = %q, want full hotkey %q", row, spec.Key)
+		}
+	}
+
+	for _, currentMode := range []mode{modeBrowse, modeCommands, modePathSearch} {
+		for _, item := range helpItemsForModeWithKeys(currentMode, keys) {
+			row := ansi.Strip(renderHelpRow(helpMatch{item: item}, false, styles, 100))
+			if !strings.Contains(row, item.Key) {
+				t.Fatalf("help row for mode %v = %q, want full hotkey %q", currentMode, row, item.Key)
+			}
+		}
+	}
+}
+
 func TestNoTemplatePickerItemUsesNTChip(t *testing.T) {
 	template := noTemplatePickerItem()
 	if template.Chip != "nt" {

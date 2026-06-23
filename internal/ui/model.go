@@ -4456,9 +4456,12 @@ func renderPopupSelectionMarker(selected bool, s styles) string {
 
 func renderCommandRow(match commandMatch, selected bool, s styles, width int) string {
 	item := match.item
-	keyWidth := 12
-	key := truncate(item.Key, keyWidth)
-	titleBudget := width - keyWidth - 3
+	const (
+		keyColumnWidth = 26
+		columnGap      = 2
+	)
+	key := truncate(item.Key, keyColumnWidth-2)
+	titleBudget := width - keyColumnWidth - columnGap
 	if titleBudget < 1 {
 		titleBudget = 1
 	}
@@ -4468,16 +4471,18 @@ func renderCommandRow(match commandMatch, selected bool, s styles, width int) st
 		title = truncate(item.Title+" (disabled)", titleBudget)
 		titleIndexes = nil
 	}
-	renderedTitle := renderMatchedText(title, s.muted, s.match, titleIndexes)
-	line := s.warn.Width(keyWidth).Render(key) + s.muted.Render("  ") + renderedTitle
-	if !item.Enabled {
-		line = s.muted.Width(keyWidth).Render(key) + s.muted.Render("  ") + s.muted.Render(title)
-	}
-	if selected {
-		line = s.selected.Width(keyWidth).Render(key) + s.selected.Render("  "+title)
-		return padSelectedRow(line, width, s)
-	}
-	return line
+	return renderPopupLabeledRow(
+		key,
+		nil,
+		title,
+		titleIndexes,
+		selected,
+		!item.Enabled,
+		s,
+		width,
+		keyColumnWidth,
+		columnGap,
+	)
 }
 
 func renderTemplatePicker(s styles, dialogs config.Dialogs, keys config.KeyBindings, templates []sessionconfig.Template, query string, cursor int, scroll int, appWidth int, appHeight int) string {
@@ -4621,48 +4626,33 @@ func renderTemplateParameterPicker(s styles, dialogs config.Dialogs, parameter s
 
 func renderTemplateRow(template sessionconfig.Template, query string, selected bool, s styles, width int) string {
 	match := templateFuzzyMatch(template, query)
-	textStyle := s.muted
-	matchStyle := s.match
-	chipStyle := s.chip
-	chipMatchStyle := s.match.Copy().Background(s.chip.GetBackground())
-	if selected {
-		textStyle = s.selected
-		matchStyle = s.selectedMatch
-		chipStyle = s.selectedChip
-		chipMatchStyle = s.selectedMatch.Copy().Background(s.selectedChip.GetBackground())
-	}
+	rowStyles := popupRowStyles(selected, false, s)
 
 	const (
-		contentIndent     = 2
 		chipColumnWidth   = 6
 		nameColumnWidth   = 24
 		templateColumnGap = 2
 	)
 
 	chip := strings.TrimSpace(template.Chip)
-	renderedChip := ""
-	if chip != "" {
-		renderedChip = renderTemplateChip(chip, chipStyle, chipMatchStyle, match.AliasIndexes[chip])
-	}
-	chipColumn := fitStyledColumn(renderedChip, chipColumnWidth, textStyle)
+	chipColumn := renderPopupChipColumn(chip, match.AliasIndexes[chip], chipColumnWidth, rowStyles)
 	name := truncate(template.Name, nameColumnWidth)
-	nameColumn := fitStyledColumn(renderMatchedText(name, textStyle, matchStyle, match.TitleIndexes), nameColumnWidth, textStyle)
+	nameColumn := fitStyledColumn(renderMatchedText(name, rowStyles.text, rowStyles.match, match.TitleIndexes), nameColumnWidth, rowStyles.text)
 	indicatorStyle := lipgloss.NewStyle().
 		Foreground(s.glyph.GetForeground()).
-		Background(textStyle.GetBackground())
+		Background(rowStyles.text.GetBackground())
 	if selected {
 		indicatorStyle = indicatorStyle.Foreground(s.selectedMatch.GetForeground())
 	}
-	indent := textStyle.Render(strings.Repeat(" ", contentIndent))
-	gap := textStyle.Render(strings.Repeat(" ", templateColumnGap))
-	indicatorColumnWidth := max(0, width-contentIndent-chipColumnWidth-nameColumnWidth-(templateColumnGap*2))
+	gap := rowStyles.text.Render(strings.Repeat(" ", templateColumnGap))
+	indicatorColumnWidth := max(0, width-chipColumnWidth-nameColumnWidth-(templateColumnGap*2))
 	indicators := strings.Join(template.WindowIndicators, " · ")
 	indicatorColumn := fitStyledColumn(
-		renderMatchedText(indicators, indicatorStyle, matchStyle, match.FieldIndexes["window_indicators"]),
+		renderMatchedText(indicators, indicatorStyle, rowStyles.match, match.FieldIndexes["window_indicators"]),
 		indicatorColumnWidth,
-		textStyle,
+		rowStyles.text,
 	)
-	line := indent + chipColumn + gap + nameColumn + gap + indicatorColumn
+	line := chipColumn + gap + nameColumn + gap + indicatorColumn
 	if selected {
 		return padSelectedRow(line, width, s)
 	}
@@ -4677,8 +4667,58 @@ func templateFuzzyMatch(template sessionconfig.Template, query string) fuzzy.Mat
 	return matches[0]
 }
 
-func renderTemplateChip(chip string, style lipgloss.Style, matchStyle lipgloss.Style, indexes []int) string {
+func renderPopupChip(chip string, style lipgloss.Style, matchStyle lipgloss.Style, indexes []int) string {
 	return style.Render(" ") + renderMatchedText(chip, style, matchStyle, indexes) + style.Render(" ")
+}
+
+type popupRowStyleSet struct {
+	text      lipgloss.Style
+	match     lipgloss.Style
+	chip      lipgloss.Style
+	chipMatch lipgloss.Style
+}
+
+func popupRowStyles(selected bool, mutedChip bool, s styles) popupRowStyleSet {
+	if selected {
+		return popupRowStyleSet{
+			text:      s.selected,
+			match:     s.selectedMatch,
+			chip:      s.selected,
+			chipMatch: s.selectedMatch,
+		}
+	}
+	chipStyle := s.chip
+	chipMatchStyle := s.match.Copy().Background(s.chip.GetBackground())
+	if mutedChip {
+		chipStyle = s.chip.Copy().Foreground(s.muted.GetForeground())
+		chipMatchStyle = chipStyle
+	}
+	return popupRowStyleSet{
+		text:      s.muted,
+		match:     s.match,
+		chip:      chipStyle,
+		chipMatch: chipMatchStyle,
+	}
+}
+
+func renderPopupChipColumn(chip string, indexes []int, width int, rowStyles popupRowStyleSet) string {
+	renderedChip := ""
+	if chip = strings.TrimSpace(chip); chip != "" {
+		renderedChip = renderPopupChip(chip, rowStyles.chip, rowStyles.chipMatch, indexes)
+	}
+	return fitStyledColumn(renderedChip, width, rowStyles.text)
+}
+
+func renderPopupLabeledRow(chip string, chipIndexes []int, label string, labelIndexes []int, selected bool, mutedChip bool, s styles, width int, chipColumnWidth int, columnGap int) string {
+	rowStyles := popupRowStyles(selected, mutedChip, s)
+	chipColumn := renderPopupChipColumn(chip, chipIndexes, chipColumnWidth, rowStyles)
+	gap := rowStyles.text.Render(strings.Repeat(" ", columnGap))
+	renderedLabel := renderMatchedText(label, rowStyles.text, rowStyles.match, labelIndexes)
+	line := chipColumn + gap + renderedLabel
+	if selected {
+		return padSelectedRow(line, width, s)
+	}
+	return fitRow(line, width)
 }
 
 func fitStyledColumn(value string, width int, fillStyle lipgloss.Style) string {
@@ -4978,21 +5018,28 @@ func renderHelpPanelWithKeys(s styles, dialogs config.Dialogs, keys config.KeyBi
 
 func renderHelpRow(match helpMatch, selected bool, s styles, width int) string {
 	item := match.item
-	keyWidth := 14
-	key := truncate(item.Key, keyWidth)
-	actionBudget := width - keyWidth - 3
+	const (
+		keyColumnWidth = 26
+		columnGap      = 2
+	)
+	key := truncate(item.Key, keyColumnWidth-2)
+	actionBudget := width - keyColumnWidth - columnGap
 	if actionBudget < 1 {
 		actionBudget = 1
 	}
 	action := truncate(item.Action, actionBudget)
-	renderedKey := fitStyledColumn(renderMatchedText(key, s.warn, s.match, match.keyIndexes), keyWidth, s.warn)
-	line := renderedKey + s.muted.Render("  ") + renderMatchedText(action, s.muted, s.match, match.actionIndexes)
-	if selected {
-		renderedKey = fitStyledColumn(renderMatchedText(key, s.selected, s.selectedMatch, match.keyIndexes), keyWidth, s.selected)
-		line = renderedKey + s.selected.Render("  ") + renderMatchedText(action, s.selected, s.selectedMatch, match.actionIndexes)
-		return padSelectedRow(line, width, s)
-	}
-	return line
+	return renderPopupLabeledRow(
+		key,
+		match.keyIndexes,
+		action,
+		match.actionIndexes,
+		selected,
+		false,
+		s,
+		width,
+		keyColumnWidth,
+		columnGap,
+	)
 }
 
 func renderHelpScrollbar(row int, scroll int, visible int, total int, s styles) string {
