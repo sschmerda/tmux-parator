@@ -1335,10 +1335,14 @@ func (m Model) renderWithOverlay(content string) string {
 		base = placeOverlay(base, renderHelpPanelWithKeys(m.styles, m.dialogs, m.keys, m.previousMode, m.helpInput, m.helpCursor, m.helpScroll, innerWidth, innerHeight), innerWidth, innerHeight)
 	}
 	if m.notice != nil {
-		base = placeCenteredOverlay(base, renderPathNoticePopupWithKeys(m.styles, m.dialogs, m.keys.Browse.OpenSelected, dismissKeys(m.keys.Browse.Quit), m.notice.Error(), innerWidth, innerHeight), innerWidth, innerHeight)
+		acceptAction := "dismiss"
+		if strings.TrimSpace(m.pendingTemplatePath) != "" {
+			acceptAction = "use template"
+		}
+		base = placeCenteredOverlay(base, renderPathNoticePopupWithKeys(m.styles, m.dialogs, m.keys.Browse.OpenSelected, acceptAction, dismissKeys(m.keys.Browse.Quit), "dismiss", m.notice.Error(), innerWidth, innerHeight), innerWidth, innerHeight)
 	}
 	if m.showsPathSearchBase() && m.pathNotice != nil {
-		base = placeCenteredOverlay(base, renderPathNoticePopupWithKeys(m.styles, m.dialogs, m.keys.PathSearch.OpenSelected, dismissKeys(m.keys.PathSearch.Close), m.pathNotice.Error(), innerWidth, innerHeight), innerWidth, innerHeight)
+		base = placeCenteredOverlay(base, renderPathNoticePopupWithKeys(m.styles, m.dialogs, m.keys.PathSearch.OpenSelected, "dismiss", dismissKeys(m.keys.PathSearch.Close), "dismiss", m.pathNotice.Error(), innerWidth, innerHeight), innerWidth, innerHeight)
 	}
 	if message, ok := m.errorMessage(); ok {
 		base = placeCenteredOverlay(base, renderErrorPopupWithKeys(m.styles, m.dialogs, dismissKeys(m.keys.Browse.Quit), m.keys.Browse.Reload, message, innerWidth, innerHeight), innerWidth, innerHeight)
@@ -4924,10 +4928,10 @@ func renderErrorPopupWithKeys(s styles, dialogs config.Dialogs, dismissKeys []st
 
 func renderPathNoticePopup(s styles, dialogs config.Dialogs, message string, appWidth int, appHeight int) string {
 	defaults := config.Default().UI.Keys
-	return renderPathNoticePopupWithKeys(s, dialogs, defaults.Browse.OpenSelected, dismissKeys(defaults.Browse.Quit), message, appWidth, appHeight)
+	return renderPathNoticePopupWithKeys(s, dialogs, defaults.Browse.OpenSelected, "dismiss", dismissKeys(defaults.Browse.Quit), "dismiss", message, appWidth, appHeight)
 }
 
-func renderPathNoticePopupWithKeys(s styles, dialogs config.Dialogs, acceptKeys []string, dismissKeys []string, message string, appWidth int, appHeight int) string {
+func renderPathNoticePopupWithKeys(s styles, dialogs config.Dialogs, acceptKeys []string, acceptAction string, dismissKeys []string, dismissAction string, message string, appWidth int, appHeight int) string {
 	width := smallDialogWidth(dialogs, appWidth)
 	bodyWidth := width - 8
 	if bodyWidth < 20 {
@@ -4935,8 +4939,16 @@ func renderPathNoticePopupWithKeys(s styles, dialogs config.Dialogs, acceptKeys 
 	}
 	lines := wrapHelpDescription(message, bodyWidth)
 	lines = append(lines, "")
-	lines = append(lines, s.popupAccent.Render(keyListLabel(append(append([]string(nil), acceptKeys...), dismissKeys...)))+s.popupMuted.Render(" dismiss"))
+	lines = append(lines, renderNoticeActions(s, acceptKeys, acceptAction, dismissKeys, dismissAction))
 	return renderCenteredTitledBox("Notice", "", strings.Join(lines, "\n"), width, smallDialogHeight(dialogs, appHeight, len(lines)+4), 3, s)
+}
+
+func renderNoticeActions(s styles, acceptKeys []string, acceptAction string, dismissKeys []string, dismissAction string) string {
+	return s.popupAccent.Render(keyListLabel(acceptKeys)) +
+		s.popupMuted.Render(" "+acceptAction) +
+		s.popupBody.Render("   ") +
+		s.popupAccent.Render(keyListLabel(dismissKeys)) +
+		s.popupMuted.Render(" "+dismissAction)
 }
 
 func renderHelpPanel(s styles, dialogs config.Dialogs, previous mode, cursor int, scroll int, appWidth int, appHeight int) string {

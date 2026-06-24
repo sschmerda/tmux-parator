@@ -1453,7 +1453,7 @@ func TestCtrlNOnAvailableWorkspaceShowsNotice(t *testing.T) {
 		t.Fatalf("mode/notice = %v/%v, want browse notice", model.mode, model.notice)
 	}
 	view := ansi.Strip(model.View())
-	if !strings.Contains(view, "Notice") || !strings.Contains(view, "not an open tmux session") || !strings.Contains(view, "<enter>/<esc> dismiss") {
+	if !strings.Contains(view, "Notice") || !strings.Contains(view, "not an open tmux session") || !strings.Contains(view, "<enter> dismiss") || !strings.Contains(view, "<esc> dismiss") {
 		t.Fatalf("workspace rename notice missing:\n%s", view)
 	}
 
@@ -2330,7 +2330,7 @@ func TestOpenTypedPathMissingShowsNoticeAndDoesNotOpen(t *testing.T) {
 		t.Fatalf("pathNotice = %v, want unavailable directory notice", model.pathNotice)
 	}
 	view := ansi.Strip(model.View())
-	if !strings.Contains(view, "Notice") || !strings.Contains(view, "not an available directory") || !strings.Contains(view, "<enter>/<esc> dismiss") {
+	if !strings.Contains(view, "Notice") || !strings.Contains(view, "not an available directory") || !strings.Contains(view, "<enter> dismiss") || !strings.Contains(view, "<esc> dismiss") {
 		t.Fatalf("missing typed path notice missing:\n%s", view)
 	}
 
@@ -2459,7 +2459,7 @@ func TestCreateTypedPathExistingDirectoryWarnsAndDoesNotOpen(t *testing.T) {
 	model.width = 96
 	model.height = 24
 	view := ansi.Strip(model.View())
-	if !strings.Contains(view, "Notice") || !strings.Contains(view, "already exists") || !strings.Contains(view, "<enter>/<esc> dismiss") {
+	if !strings.Contains(view, "Notice") || !strings.Contains(view, "already exists") || !strings.Contains(view, "<enter> dismiss") || !strings.Contains(view, "<esc> dismiss") {
 		t.Fatalf("existing directory notice missing:\n%s", view)
 	}
 
