@@ -137,6 +137,7 @@ type Model struct {
 	pathCompletionInput   string
 	pathCompletionRoot    string
 	pathCompletionQuery   string
+	pathStreamQuery       string
 	pathStream            <-chan pathsearch.Batch
 	pathCancel            context.CancelFunc
 	width                 int
@@ -152,6 +153,7 @@ type Model struct {
 	templatePreviousMode  mode
 	loading               bool
 	pathBusy              bool
+	pathLimited           bool
 	styles                styles
 }
 
@@ -479,6 +481,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.batch.Done {
 			m.pathBusy = false
+			m.pathLimited = msg.batch.Limited
 			m.pathErr = msg.batch.Err
 			m.pathStream = nil
 			m.pathCancel = nil
@@ -1677,10 +1680,10 @@ func (m *Model) applyPathFilter() {
 }
 
 func (m *Model) applyPathInputChange() tea.Cmd {
-	root, _ := parsePathInput(m.pathInput, m.defaultPathRoot())
+	root, query := parsePathInput(m.pathInput, m.defaultPathRoot())
 	m.pathErr = nil
 	m.pathNotice = nil
-	if root != m.pathRoot {
+	if root != m.pathRoot || (query != m.pathStreamQuery && (m.pathBusy || m.pathLimited)) {
 		m.pathRoot = root
 		m.pathCursor = 0
 		m.pathScroll = 0
@@ -2816,9 +2819,11 @@ func (m Model) openPathSearch() (tea.Model, tea.Cmd) {
 func (m *Model) startPathStream(root string) tea.Cmd {
 	m.stopPathStream()
 	ctx, cancel := context.WithCancel(context.Background())
-	stream := pathsearch.Stream(ctx, root, m.pathConfig.options)
+	query := m.pathQuery()
+	stream := pathsearch.Stream(ctx, root, m.pathSearchOptions(query))
 	m.pathCancel = cancel
 	m.pathStream = stream
+	m.pathStreamQuery = query
 	m.pathItems = nil
 	m.pathResult = nil
 	m.pathCursor = 0
@@ -2826,6 +2831,7 @@ func (m *Model) startPathStream(root string) tea.Cmd {
 	m.pathErr = nil
 	m.pathNotice = nil
 	m.pathBusy = true
+	m.pathLimited = false
 	m.clearPathCompletion()
 	return m.waitPathBatch(root, stream)
 }
@@ -2833,9 +2839,11 @@ func (m *Model) startPathStream(root string) tea.Cmd {
 func (m *Model) startPathStreamPreserveCompletion(root string) tea.Cmd {
 	m.stopPathStream()
 	ctx, cancel := context.WithCancel(context.Background())
-	stream := pathsearch.Stream(ctx, root, m.pathConfig.options)
+	query := m.pathQuery()
+	stream := pathsearch.Stream(ctx, root, m.pathSearchOptions(query))
 	m.pathCancel = cancel
 	m.pathStream = stream
+	m.pathStreamQuery = query
 	m.pathItems = nil
 	m.pathResult = nil
 	m.pathCursor = 0
@@ -2843,6 +2851,7 @@ func (m *Model) startPathStreamPreserveCompletion(root string) tea.Cmd {
 	m.pathErr = nil
 	m.pathNotice = nil
 	m.pathBusy = true
+	m.pathLimited = false
 	return m.waitPathBatch(root, stream)
 }
 
@@ -2852,7 +2861,15 @@ func (m *Model) stopPathStream() {
 	}
 	m.pathCancel = nil
 	m.pathStream = nil
+	m.pathStreamQuery = ""
 	m.pathBusy = false
+	m.pathLimited = false
+}
+
+func (m Model) pathSearchOptions(query string) pathsearch.Options {
+	options := m.pathConfig.options
+	options.RetainQuery = query
+	return options
 }
 
 func (m Model) openCandidate(selected candidate) (tea.Model, tea.Cmd) {

@@ -40,6 +40,14 @@ func TestFilterReturnsTitleMatchIndexes(t *testing.T) {
 	}
 }
 
+func TestFilterMatchesTitlePrefixBeforeUnderscore(t *testing.T) {
+	candidates := []Candidate{{Title: "zahnoel_analyse"}}
+	matches := Filter(candidates, "zahn")
+	if len(matches) != 1 {
+		t.Fatalf("match count = %d, want 1", len(matches))
+	}
+}
+
 func TestFilterMatchesExtraFields(t *testing.T) {
 	candidates := []Candidate{
 		{Title: "tmux-parator", Fields: []Field{{Name: "path", Value: "/Users/me/code/tmux-parator"}}},

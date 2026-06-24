@@ -50,6 +50,28 @@ func TestSearchGoHonorsLimit(t *testing.T) {
 	}
 }
 
+func TestSearchGoRetainsQueryMatchesBeyondLimit(t *testing.T) {
+	root := t.TempDir()
+	mkdir(t, root, "aaa")
+	mkdir(t, root, "zahnoel_analyse")
+
+	got, err := Search(context.Background(), root, Options{
+		Backend:     "go",
+		MaxDepth:    1,
+		Limit:       1,
+		RetainQuery: "zahn",
+	})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("candidates = %#v, want limited prefix plus matching repo", got)
+	}
+	if got[1].Name != "zahnoel_analyse" {
+		t.Fatalf("second candidate = %q, want zahnoel_analyse", got[1].Name)
+	}
+}
+
 func TestSearchGoCanFindResultsBeyondOldDefaultLimit(t *testing.T) {
 	root := t.TempDir()
 	for i := 0; i < 600; i++ {

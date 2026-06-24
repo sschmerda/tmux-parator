@@ -22,6 +22,7 @@ type Options struct {
 	SkipGitignored bool
 	SkipDirs       []string
 	Limit          int
+	RetainQuery    string
 }
 
 type Candidate struct {
@@ -32,6 +33,7 @@ type Candidate struct {
 type Batch struct {
 	Candidates []Candidate
 	Done       bool
+	Limited    bool
 	Err        error
 }
 
@@ -134,6 +136,7 @@ func DirectChildren(root string, options Options) ([]Candidate, error) {
 func streamGo(ctx context.Context, ch chan<- Batch, root string, options Options) {
 	batch := make([]Candidate, 0, 50)
 	count := 0
+	limited := false
 	ignores := gitignore.New(root, options.SkipGitignored)
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
@@ -160,15 +163,19 @@ func streamGo(ctx context.Context, ch chan<- Batch, root string, options Options
 		if ignores.Ignored(path, true) {
 			return filepath.SkipDir
 		}
-		batch = append(batch, Candidate{Path: path, Name: entry.Name()})
 		count++
+		candidate := Candidate{Path: path, Name: entry.Name()}
+		if shouldRetainCandidate(root, candidate, count, options) {
+			batch = append(batch, candidate)
+		}
 		if len(batch) >= 50 {
-			if !sendBatch(ctx, ch, batch, false, nil) {
+			if !sendBatch(ctx, ch, batch, false, false, nil) {
 				return ctx.Err()
 			}
 			batch = make([]Candidate, 0, 50)
 		}
-		if options.Limit > 0 && count >= options.Limit {
+		if options.Limit > 0 && count >= options.Limit && strings.TrimSpace(options.RetainQuery) == "" {
+			limited = true
 			return errLimitReached
 		}
 		return nil
@@ -176,14 +183,15 @@ func streamGo(ctx context.Context, ch chan<- Batch, root string, options Options
 	if errors.Is(err, errLimitReached) || errors.Is(err, context.Canceled) {
 		err = nil
 	}
-	if len(batch) > 0 && !sendBatch(ctx, ch, batch, false, nil) {
+	if len(batch) > 0 && !sendBatch(ctx, ch, batch, false, false, nil) {
 		return
 	}
-	sendBatch(ctx, ch, nil, true, err)
+	sendBatch(ctx, ch, nil, true, limited, err)
 }
 
 func searchGo(ctx context.Context, root string, options Options) ([]Candidate, error) {
 	var candidates []Candidate
+	count := 0
 	ignores := gitignore.New(root, options.SkipGitignored)
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
@@ -210,8 +218,12 @@ func searchGo(ctx context.Context, root string, options Options) ([]Candidate, e
 		if ignores.Ignored(path, true) {
 			return filepath.SkipDir
 		}
-		candidates = append(candidates, Candidate{Path: path, Name: entry.Name()})
-		if options.Limit > 0 && len(candidates) >= options.Limit {
+		count++
+		candidate := Candidate{Path: path, Name: entry.Name()}
+		if shouldRetainCandidate(root, candidate, count, options) {
+			candidates = append(candidates, candidate)
+		}
+		if options.Limit > 0 && count >= options.Limit && strings.TrimSpace(options.RetainQuery) == "" {
 			return errLimitReached
 		}
 		return nil
@@ -241,16 +253,19 @@ func streamFD(ctx context.Context, ch chan<- Batch, root string, options Options
 		if path == "" || filepath.Clean(path) == filepath.Clean(root) {
 			continue
 		}
-		batch = append(batch, Candidate{Path: path, Name: filepath.Base(path)})
 		count++
+		candidate := Candidate{Path: path, Name: filepath.Base(path)}
+		if shouldRetainCandidate(root, candidate, count, options) {
+			batch = append(batch, candidate)
+		}
 		if len(batch) >= 50 {
-			if !sendBatch(ctx, ch, batch, false, nil) {
+			if !sendBatch(ctx, ch, batch, false, false, nil) {
 				_ = cmd.Wait()
 				return true
 			}
 			batch = make([]Candidate, 0, 50)
 		}
-		if options.Limit > 0 && count >= options.Limit {
+		if options.Limit > 0 && count >= options.Limit && strings.TrimSpace(options.RetainQuery) == "" {
 			limited = true
 			if cmd.Process != nil {
 				_ = cmd.Process.Kill()
@@ -270,14 +285,14 @@ func streamFD(ctx context.Context, ch chan<- Batch, root string, options Options
 	if scanErr == nil {
 		waitErr = nil
 	}
-	if len(batch) > 0 && !sendBatch(ctx, ch, batch, false, nil) {
+	if len(batch) > 0 && !sendBatch(ctx, ch, batch, false, false, nil) {
 		return true
 	}
 	if scanErr != nil {
-		sendBatch(ctx, ch, nil, true, scanErr)
+		sendBatch(ctx, ch, nil, true, limited, scanErr)
 		return true
 	}
-	sendBatch(ctx, ch, nil, true, waitErr)
+	sendBatch(ctx, ch, nil, true, limited, waitErr)
 	return true
 }
 
@@ -286,7 +301,7 @@ func searchFD(ctx context.Context, root string, options Options) ([]Candidate, e
 	if err != nil {
 		return searchGo(ctx, root, options)
 	}
-	candidates := parseFDOutput(root, output, options.Limit)
+	candidates := parseFDOutputWithOptions(root, output, options)
 	sortCandidates(candidates)
 	return candidates, nil
 }
@@ -310,29 +325,86 @@ func fdArgs(root string, options Options) []string {
 	return args
 }
 
-func sendBatch(ctx context.Context, ch chan<- Batch, candidates []Candidate, done bool, err error) bool {
+func sendBatch(ctx context.Context, ch chan<- Batch, candidates []Candidate, done bool, limited bool, err error) bool {
 	select {
 	case <-ctx.Done():
 		return false
-	case ch <- Batch{Candidates: candidates, Done: done, Err: err}:
+	case ch <- Batch{Candidates: candidates, Done: done, Limited: limited, Err: err}:
 		return true
 	}
 }
 
 func parseFDOutput(root string, output []byte, limit int) []Candidate {
+	return parseFDOutputWithOptions(root, output, Options{Limit: limit})
+}
+
+func parseFDOutputWithOptions(root string, output []byte, options Options) []Candidate {
 	scanner := bufio.NewScanner(bytes.NewReader(output))
 	var candidates []Candidate
+	count := 0
 	for scanner.Scan() {
 		path := strings.TrimSpace(scanner.Text())
 		if path == "" || filepath.Clean(path) == filepath.Clean(root) {
 			continue
 		}
-		candidates = append(candidates, Candidate{Path: path, Name: filepath.Base(path)})
-		if limit > 0 && len(candidates) >= limit {
+		count++
+		candidate := Candidate{Path: path, Name: filepath.Base(path)}
+		if shouldRetainCandidate(root, candidate, count, options) {
+			candidates = append(candidates, candidate)
+		}
+		if options.Limit > 0 && count >= options.Limit && strings.TrimSpace(options.RetainQuery) == "" {
 			break
 		}
 	}
 	return candidates
+}
+
+func shouldRetainCandidate(root string, candidate Candidate, count int, options Options) bool {
+	if options.Limit <= 0 || count <= options.Limit {
+		return true
+	}
+	return candidateMatchesRetainQuery(root, candidate, options.RetainQuery)
+}
+
+func candidateMatchesRetainQuery(root string, candidate Candidate, query string) bool {
+	tokens := strings.Fields(strings.ToLower(strings.TrimSpace(query)))
+	if len(tokens) == 0 {
+		return false
+	}
+	values := []string{
+		candidate.Name,
+		filepath.ToSlash(candidate.Path),
+	}
+	if relativePath, err := filepath.Rel(root, candidate.Path); err == nil && relativePath != "." {
+		values = append(values, filepath.ToSlash(relativePath))
+	}
+	for _, token := range tokens {
+		found := false
+		for _, value := range values {
+			if fuzzyContains(strings.ToLower(value), token) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+func fuzzyContains(value string, token string) bool {
+	if strings.Contains(value, token) {
+		return true
+	}
+	index := 0
+	tokenRunes := []rune(token)
+	for _, r := range value {
+		if index < len(tokenRunes) && r == tokenRunes[index] {
+			index++
+		}
+	}
+	return index == len(tokenRunes)
 }
 
 func sortCandidates(candidates []Candidate) {
