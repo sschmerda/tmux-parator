@@ -12,6 +12,7 @@ func TestRenderInterpolatesTemplateCreationFields(t *testing.T) {
 		Name:      "Repository",
 		Focus:     "{window_prefix}.{editor}",
 		Variables: map[string]string{"window_prefix": "{session_name}-work", "editor": "editor"},
+		Env:       map[string]string{"APP_ENV": "{session_kind}", "PROJECT_ROOT": "{workspace_path}"},
 		BeforeCreateHooks: []Hook{
 			{Run: "printf '%s' {workspace_path}"},
 		},
@@ -45,6 +46,9 @@ func TestRenderInterpolatesTemplateCreationFields(t *testing.T) {
 	if rendered.Focus != "aoc-work.editor" {
 		t.Fatalf("focus = %q, want aoc-work.editor", rendered.Focus)
 	}
+	if !reflect.DeepEqual(rendered.Env, map[string]string{"APP_ENV": "repo", "PROJECT_ROOT": "/tmp/repos/aoc"}) {
+		t.Fatalf("env = %#v, want interpolated session environment", rendered.Env)
+	}
 	window := rendered.Windows[0]
 	if window.Name != "aoc-work" || window.Focus != "editor" {
 		t.Fatalf("window name/focus = %q/%q, want aoc-work/editor", window.Name, window.Focus)
@@ -64,6 +68,24 @@ func TestRenderInterpolatesTemplateCreationFields(t *testing.T) {
 	}
 	if rendered.AfterCreateHooks[0].Run != "printf '%s' ready" {
 		t.Fatalf("after hook = %q", rendered.AfterCreateHooks[0].Run)
+	}
+}
+
+func TestRenderRejectsUnknownVariableInEnv(t *testing.T) {
+	template := Template{
+		ID:    "repo",
+		Name:  "Repository",
+		Focus: "work.shell",
+		Env:   map[string]string{"PROJECT_ROOT": "{missing}"},
+		Windows: []Window{{
+			Name:   "work",
+			Layout: Node{Type: "pane", Name: "shell"},
+		}},
+	}
+
+	_, err := Render(template, RenderContext{SessionName: "aoc", WorkspacePath: "/tmp/aoc"})
+	if err == nil || !strings.Contains(err.Error(), `env: PROJECT_ROOT: unknown variable "missing"`) {
+		t.Fatalf("Render() error = %v, want env interpolation error", err)
 	}
 }
 

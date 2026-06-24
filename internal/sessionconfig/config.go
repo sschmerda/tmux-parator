@@ -24,6 +24,7 @@ type Template struct {
 	Chip              string
 	WindowIndicators  []string
 	Variables         map[string]string
+	Env               map[string]string
 	Parameters        []Parameter
 	Enabled           bool
 	Source            string
@@ -81,6 +82,7 @@ type rawTemplate struct {
 	WindowIndicators interface{}       `toml:"window_indicators"`
 	Glyphs           interface{}       `toml:"glyphs"`
 	Variables        map[string]string `toml:"variables"`
+	Env              map[string]string `toml:"env"`
 	Parameters       []rawParameter    `toml:"parameters"`
 	Enabled          *bool             `toml:"enabled"`
 	Match            interface{}       `toml:"match"`
@@ -283,6 +285,7 @@ func rawTemplateEmpty(template rawTemplate) bool {
 		template.WindowIndicators == nil &&
 		template.Glyphs == nil &&
 		len(template.Variables) == 0 &&
+		len(template.Env) == 0 &&
 		len(template.Parameters) == 0 &&
 		template.Enabled == nil &&
 		template.Match == nil &&
@@ -342,6 +345,7 @@ func normalizeTemplate(raw rawTemplate, configDir string) (Template, error) {
 		Chip:              strings.TrimSpace(raw.Chip),
 		WindowIndicators:  windowIndicators,
 		Variables:         cloneVariables(raw.Variables),
+		Env:               cloneVariables(raw.Env),
 		Enabled:           true,
 		Source:            SourceGlobal,
 		Match:             match,
@@ -351,6 +355,9 @@ func normalizeTemplate(raw rawTemplate, configDir string) (Template, error) {
 	}
 	template.Parameters, err = normalizeParameters(raw.Parameters, template.Variables)
 	if err != nil {
+		return Template{}, err
+	}
+	if err := validateEnv(template.Env); err != nil {
 		return Template{}, err
 	}
 	if raw.Enabled != nil {
@@ -384,6 +391,15 @@ func normalizeTemplate(raw rawTemplate, configDir string) (Template, error) {
 		return Template{}, fmt.Errorf("focus %q does not resolve to a pane", template.Focus)
 	}
 	return template, nil
+}
+
+func validateEnv(env map[string]string) error {
+	for name := range env {
+		if !variableNamePattern.MatchString(name) {
+			return fmt.Errorf("env variable name %q is invalid", name)
+		}
+	}
+	return nil
 }
 
 func normalizeParameters(rawParameters []rawParameter, variables map[string]string) ([]Parameter, error) {

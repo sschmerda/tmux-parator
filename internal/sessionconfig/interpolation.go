@@ -55,6 +55,10 @@ func Render(template Template, context RenderContext) (Template, error) {
 	rendered := template
 	rendered.SessionName = context.SessionName
 	rendered.Variables = resolvedVariables
+	rendered.Env, err = renderEnv(template.Env, values, context.Environment)
+	if err != nil {
+		return Template{}, interpolationFieldError(template, "env", err)
+	}
 	if rendered.Focus, err = interpolate(template.Focus, values, context.Environment); err != nil {
 		return Template{}, interpolationFieldError(template, "focus", err)
 	}
@@ -213,6 +217,21 @@ func renderHooks(hooks []Hook, values map[string]string, environment map[string]
 		}
 		rendered[i] = hook
 		rendered[i].Run = run
+	}
+	return rendered, nil
+}
+
+func renderEnv(env map[string]string, values map[string]string, environment map[string]string) (map[string]string, error) {
+	if len(env) == 0 {
+		return nil, nil
+	}
+	rendered := make(map[string]string, len(env))
+	for name, raw := range env {
+		value, err := interpolate(raw, values, environment)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
+		}
+		rendered[name] = value
 	}
 	return rendered, nil
 }

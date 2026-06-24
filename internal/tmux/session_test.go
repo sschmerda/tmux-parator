@@ -806,6 +806,51 @@ func TestNewSessionWithLayoutInterpolatesBeforeRunningCommands(t *testing.T) {
 	}
 }
 
+func TestNewSessionWithLayoutSetsTemplateEnvironment(t *testing.T) {
+	runner := &recordingRunner{outputs: []string{"@1 %1\n", "%2\n"}}
+	client := newTestClient(runner)
+	template := sessionconfig.Template{
+		ID:    "repo",
+		Name:  "Repository",
+		Focus: "work.shell",
+		Env: map[string]string{
+			"APP_ENV":      "development",
+			"PROJECT_ROOT": "{workspace_path}",
+		},
+		AfterCreateHooks: []sessionconfig.Hook{{Run: "echo ready"}},
+		Windows: []sessionconfig.Window{{
+			Name: "work",
+			Layout: sessionconfig.Node{
+				Type:     "columns",
+				Sizes:    []int{1, 1},
+				Children: []sessionconfig.Node{{Type: "pane", Name: "shell", Command: "echo $PROJECT_ROOT"}, {Type: "pane", Name: "logs"}},
+			},
+		}},
+	}
+
+	err := client.NewSessionWithLayout(context.Background(), "aoc", "/tmp/repos/aoc", SessionMetadata{Kind: "repo"}, template)
+	if err != nil {
+		t.Fatalf("NewSessionWithLayout() error = %v", err)
+	}
+	newSession := []string{"tmux", "new-session", "-d", "-x", "120", "-y", "40", "-e", "APP_ENV=development", "-e", "PROJECT_ROOT=/tmp/repos/aoc", "-P", "-F", "#{window_id} #{pane_id}", "-s", "aoc", "-n", "work", "-c", "/tmp/repos/aoc"}
+	if !hasCall(runner.calls, newSession) {
+		t.Fatalf("runner calls missing new-session env args: %#v", runner.calls)
+	}
+	setProjectRoot := []string{"tmux", "set-environment", "-t", "=aoc:", "PROJECT_ROOT", "/tmp/repos/aoc"}
+	afterHook := []string{"dir:/tmp/repos/aoc", "/bin/sh", "-c", "echo ready"}
+	if !hasCall(runner.calls, []string{"tmux", "set-environment", "-t", "=aoc:", "APP_ENV", "development"}) ||
+		!hasCall(runner.calls, setProjectRoot) {
+		t.Fatalf("runner calls missing set-environment calls: %#v", runner.calls)
+	}
+	splitPane := []string{"tmux", "split-window", "-d", "-P", "-F", "#{pane_id}", "-h", "-t", "%1", "-c", "/tmp/repos/aoc"}
+	if !callAppearsAfter(runner.calls, splitPane, setProjectRoot) {
+		t.Fatalf("split pane was created before session environment was stored: %#v", runner.calls)
+	}
+	if !callAppearsAfter(runner.calls, afterHook, setProjectRoot) {
+		t.Fatalf("after hook ran before session environment was stored: %#v", runner.calls)
+	}
+}
+
 func TestNewSessionWithLayoutInterpolationFailureHasNoSideEffects(t *testing.T) {
 	runner := &recordingRunner{}
 	client := newTestClient(runner)

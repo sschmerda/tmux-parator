@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -216,6 +217,7 @@ func (c Client) newSessionWithLayout(ctx context.Context, name string, path stri
 	if width, height, ok := c.currentWindowSize(ctx); ok {
 		args = append(args, "-x", strconv.Itoa(width), "-y", strconv.Itoa(height))
 	}
+	args = appendTemplateEnvArgs(args, template.Env)
 	args = append(args, "-P", "-F", "#{window_id} #{pane_id}", "-s", name, "-n", firstWindow.Name)
 	if createPath := nodeCreatePath(path, firstWindow.Layout); strings.TrimSpace(createPath) != "" {
 		args = append(args, "-c", createPath)
@@ -235,6 +237,9 @@ func (c Client) newSessionWithLayout(ctx context.Context, name string, path stri
 	firstWindowID, firstPane, err := parseWindowPaneIDs(out)
 	if err != nil {
 		return fmt.Errorf("create tmux session: %w", err)
+	}
+	if err := c.setSessionEnvironment(ctx, name, template.Env); err != nil {
+		return err
 	}
 	windowTargets := map[string]windowTarget{}
 	var paneStartups []paneStartup
@@ -300,6 +305,32 @@ func (c Client) newSessionWithLayout(ctx context.Context, name string, path stri
 	if switchAfterCreation {
 		if err := c.SwitchSession(ctx, name); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func appendTemplateEnvArgs(args []string, env map[string]string) []string {
+	for _, name := range sortedMapKeys(env) {
+		args = append(args, "-e", name+"="+env[name])
+	}
+	return args
+}
+
+func sortedMapKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func (c Client) setSessionEnvironment(ctx context.Context, name string, env map[string]string) error {
+	for _, key := range sortedMapKeys(env) {
+		out, err := c.runner.Run(ctx, "tmux", "set-environment", "-t", exactSessionTarget(name), key, env[key])
+		if err != nil {
+			return commandError("set tmux session environment", out, err)
 		}
 	}
 	return nil

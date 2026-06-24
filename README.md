@@ -635,6 +635,10 @@ default = "codex"
 [variables]
 window_prefix = "{session_name}-work"
 
+[env]
+PROJECT_ROOT = "{workspace_path}"
+APP_ENV = "development"
+
 [[hooks.before_create_command]]
 run = "git fetch --quiet"
 kinds = ["repo"]
@@ -679,6 +683,10 @@ default = "nvim"
 
 [variables]
 window_prefix = "{session_name}-shell"
+
+[env]
+PROJECT_ROOT = "{workspace_path}"
+APP_ENV = "development"
 
 [[hooks.before_create_command]]
 run = "git fetch --quiet"
@@ -773,6 +781,7 @@ Session template fields:
 | `chip` | template | Optional short searchable abbreviation rendered before the template name for quick fuzzy selection. |
 | `window_indicators` | template | Optional string or string list shown after the template name to summarize the template's windows. Entries may contain glyphs, text, or both and are separated by `·`. Indicator text participates in fuzzy search. |
 | `variables` | template | Optional string table defining reusable interpolation values. Variables can reference built-ins, environment variables, and other template variables. |
+| `env` | template | Optional string table of session-local tmux environment variables. Values support interpolation and are inherited by panes in the created session. |
 | `parameters` | template | Optional ordered array of interactive option prompts. Each selected value becomes an interpolation variable during creation. |
 | `parameters.name` | parameter | Required unique placeholder name. It cannot conflict with built-ins or `[variables]`. |
 | `parameters.prompt` | parameter | Required label shown above the option list. |
@@ -905,7 +914,8 @@ Layout rules:
 
 Template values are expanded immediately before session creation. Interpolation
 is supported in template and window `focus`, window and pane names, pane paths,
-pane commands and scripts, and all before/after creation hooks.
+pane commands and scripts, template `env` values, and all before/after creation
+hooks.
 
 The optional `session_name` field is expanded first:
 
@@ -979,6 +989,18 @@ Variables may reference variables declared later in the table. Cycles and
 unknown variables are errors. Existing shell variables such as `${HOME}` are
 left unchanged. Use doubled braces to produce a literal placeholder:
 `{{session_name}}` becomes `{session_name}`.
+
+Session-local environment values are declared in `[env]`:
+
+```toml
+[env]
+PROJECT_ROOT = "{workspace_path}"
+APP_ENV = "development"
+```
+
+These variables are set on the created tmux session and inherited by panes in
+that session. They do not modify the global shell environment. Inspect them
+with `tmux show-environment -t <session-name>`.
 
 Interpolation is strict and runs before any hook or tmux command. Expanded
 window and pane names must remain non-empty and unique, and expanded focus paths

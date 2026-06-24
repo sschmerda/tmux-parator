@@ -23,6 +23,10 @@ default = "codex"
 [variables]
 window_prefix = "{session_name}-shell"
 
+[env]
+PROJECT_ROOT = "{workspace_path}"
+APP_ENV = "development"
+
 [[hooks.before_create_command]]
 run = "git fetch --quiet"
 kinds = ["repo"]

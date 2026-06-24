@@ -18,6 +18,10 @@ chip = "z"
 window_indicators = [" editor", " git"]
 match = ["/tmp/repos/*", "~/work/*"]
 
+[env]
+PROJECT_ROOT = "{workspace_path}"
+APP_ENV = "development"
+
 [[hooks.before_create_command]]
 run = "git fetch --quiet"
 
@@ -73,6 +77,9 @@ type = "pane"
 	if len(template.Match) != 2 || template.Match[0] != filepath.Clean("/tmp/repos/*") {
 		t.Fatalf("match = %#v, want normalized patterns", template.Match)
 	}
+	if !reflect.DeepEqual(template.Env, map[string]string{"APP_ENV": "development", "PROJECT_ROOT": "{workspace_path}"}) {
+		t.Fatalf("env = %#v, want parsed template environment", template.Env)
+	}
 	if len(template.BeforeCreateHooks) != 1 || template.BeforeCreateHooks[0].Run != "git fetch --quiet" {
 		t.Fatalf("before_create_hooks = %#v, want git fetch", template.BeforeCreateHooks)
 	}
@@ -95,6 +102,29 @@ type = "pane"
 	}
 	if editor.CommandMode != CommandModeInteractive {
 		t.Fatalf("editor command_mode = %q, want %q", editor.CommandMode, CommandModeInteractive)
+	}
+}
+
+func TestLoadFileRejectsInvalidEnvVariableName(t *testing.T) {
+	path := writeTemplateConfig(t, `
+id = "bad-env"
+name = "Bad Env"
+focus = "work.shell"
+
+[env]
+"APP-ENV" = "development"
+
+[[windows]]
+name = "work"
+
+[windows.layout]
+type = "pane"
+name = "shell"
+`)
+
+	_, err := LoadFile(path)
+	if err == nil || !strings.Contains(err.Error(), `env variable name "APP-ENV" is invalid`) {
+		t.Fatalf("LoadFile() error = %v, want invalid env name error", err)
 	}
 }
 
