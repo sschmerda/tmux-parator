@@ -1117,6 +1117,7 @@ avoid required dependencies on fuzzy finders or preview tools.
 
 - Add template/layout memory.
 - Add bounded state file.
+- Refactor repeated UI command and notice popup handling without changing behavior.
 - Add script layout backend.
 
 ### v0.7+
