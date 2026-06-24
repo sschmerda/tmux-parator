@@ -1004,6 +1004,9 @@ Template selection precedence is:
 Choosing `No template` from the template picker remembers that explicit choice
 for the workspace after the normal session is created successfully. Later
 `Enter` opens the workspace without falling through to a matching template.
+The command palette includes `Clear selected template memory` for removing the
+remembered template or no-template choice from the selected workspace. In path
+search, the equivalent command is `Clear selected result template memory`.
 
 The state file is stored at
 `$XDG_STATE_HOME/tmux-parator/state.json`, or

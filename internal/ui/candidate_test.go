@@ -1207,6 +1207,113 @@ func TestCommandPaletteIncludesToggleAndQuitCommands(t *testing.T) {
 	}
 }
 
+func TestClearTemplateMemoryCommandAvailability(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.rootItems = []discovery.Candidate{{Name: "repo", Path: "/tmp/repo", Mode: "repo"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	item, ok := commandByID(model.commandItems(), commandClearTemplate)
+	if !ok {
+		t.Fatal("clear template memory command missing")
+	}
+	if item.Enabled || !strings.Contains(item.DisabledReason, "not available") {
+		t.Fatalf("command = %#v, want disabled without memory", item)
+	}
+
+	memory := &fakeTemplateMemory{
+		associations: map[string]templatememory.Association{
+			"/tmp/repo": {TemplateID: "repo"},
+		},
+	}
+	model = NewModelWithTemplateMemory(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{}, config.Default().UI.Keys, nil, memory)
+	model.rootItems = []discovery.Candidate{{Name: "repo", Path: "/tmp/repo", Mode: "repo"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	item, ok = commandByID(model.commandItems(), commandClearTemplate)
+	if !ok || !item.Enabled {
+		t.Fatalf("command = %#v/%v, want enabled with memory", item, ok)
+	}
+	if item.Key != "command palette" {
+		t.Fatalf("command key = %q, want command palette", item.Key)
+	}
+}
+
+func TestClearTemplateMemoryCommandForgetsSelectedWorkspace(t *testing.T) {
+	memory := &fakeTemplateMemory{
+		associations: map[string]templatememory.Association{
+			"/tmp/repo": {TemplateID: "repo"},
+		},
+	}
+	model := NewModelWithTemplateMemory(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{}, config.Default().UI.Keys, nil, memory)
+	model.rootItems = []discovery.Candidate{{Name: "repo", Path: "/tmp/repo", Mode: "repo"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+	model.pendingTemplatePath = "/tmp/repo"
+	model.width = 96
+	model.height = 24
+	model.openCommands(modeBrowse)
+
+	item, ok := commandByID(model.commandItems(), commandClearTemplate)
+	if !ok || !item.Enabled {
+		t.Fatalf("command = %#v/%v, want enabled", item, ok)
+	}
+	updated, cmd := model.runCommand(item)
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("clear template memory command returned nil command")
+	}
+	updated, cmd = model.Update(cmd())
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatalf("update cmd = %#v, want nil", cmd)
+	}
+	if memory.forgottenPath != "/tmp/repo" {
+		t.Fatalf("forgottenPath = %q, want /tmp/repo", memory.forgottenPath)
+	}
+	if _, ok := memory.associations["/tmp/repo"]; ok {
+		t.Fatalf("association was not removed: %#v", memory.associations)
+	}
+	if model.mode != modeBrowse || model.notice == nil || model.notice.Error() != "template memory cleared" {
+		t.Fatalf("mode/notice = %v/%v, want browse cleared notice", model.mode, model.notice)
+	}
+	view := ansi.Strip(model.View())
+	if strings.Contains(view, "<enter> use template") || strings.Contains(view, "/tmp/repo") || !strings.Contains(view, "<enter>/<esc> dismiss") {
+		t.Fatalf("clear template notice has wrong actions:\n%s", view)
+	}
+}
+
+func TestPathCommandPaletteClearTemplateMemoryUsesSelectedResult(t *testing.T) {
+	memory := &fakeTemplateMemory{
+		associations: map[string]templatememory.Association{
+			"/tmp/repo": {WithoutTemplate: true},
+		},
+	}
+	model := NewModelWithTemplateMemory(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{}, config.Default().UI.Keys, nil, memory)
+	model.mode = modePathSearch
+	model.pathResult = []candidate{{kind: candidatePath, fsPath: pathsearch.Candidate{Name: "repo", Path: "/tmp/repo"}}}
+	model.openCommands(modePathSearch)
+
+	item, ok := commandByID(model.commandItems(), commandClearTemplate)
+	if !ok || !item.Enabled || item.Title != "Clear selected result template memory" {
+		t.Fatalf("command = %#v/%v, want path clear enabled", item, ok)
+	}
+	updated, cmd := model.runCommand(item)
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("path clear template memory command returned nil command")
+	}
+	updated, _ = model.Update(cmd())
+	model = updated.(Model)
+	if memory.forgottenPath != "/tmp/repo" {
+		t.Fatalf("forgottenPath = %q, want /tmp/repo", memory.forgottenPath)
+	}
+	if model.mode != modePathSearch || model.pathNotice == nil || model.pathNotice.Error() != "template memory cleared" {
+		t.Fatalf("mode/pathNotice = %v/%v, want path-search cleared notice", model.mode, model.pathNotice)
+	}
+}
+
 func TestPathCommandPaletteCreateTypedPathEnabledOnlyForMissingPath(t *testing.T) {
 	root := t.TempDir()
 	missing := filepath.Join(root, "missing")

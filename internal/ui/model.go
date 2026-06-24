@@ -198,6 +198,11 @@ type createdMsg struct {
 	err      error
 }
 
+type templateMemoryClearedMsg struct {
+	path string
+	err  error
+}
+
 type rootsLoadedMsg struct {
 	roots []discovery.Candidate
 	err   error
@@ -432,6 +437,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		return m, tea.Batch(m.loadSessions(), m.switchSession(msg.name))
+	case templateMemoryClearedMsg:
+		m.loading = false
+		m.err = nil
+		m.clearPendingTemplate()
+		if msg.err != nil {
+			if m.commandPreviousMode == modePathSearch {
+				m.mode = modePathSearch
+				m.pathNotice = fmt.Errorf("clear template memory: %w", msg.err)
+			} else {
+				m.mode = modeBrowse
+				m.notice = fmt.Errorf("clear template memory: %w", msg.err)
+			}
+			return m, nil
+		}
+		if m.commandPreviousMode == modePathSearch {
+			m.mode = modePathSearch
+			m.pathNotice = fmt.Errorf("template memory cleared")
+		} else {
+			m.mode = modeBrowse
+			m.notice = fmt.Errorf("template memory cleared")
+		}
+		return m, nil
 	case rootsLoadedMsg:
 		m.loading = false
 		m.rootErr = msg.err
@@ -2727,6 +2754,15 @@ func (m Model) createSessionWithTemplate(name string, path string, metadata tmux
 	}
 }
 
+func (m Model) clearTemplateMemory(path string) tea.Cmd {
+	return func() tea.Msg {
+		if m.templateMemory == nil {
+			return templateMemoryClearedMsg{path: path, err: fmt.Errorf("template memory is not available")}
+		}
+		return templateMemoryClearedMsg{path: path, err: m.templateMemory.Forget(path)}
+	}
+}
+
 func (m *Model) clearPendingTemplate() {
 	m.pendingTemplateName = ""
 	m.pendingTemplatePath = ""
@@ -4025,6 +4061,7 @@ const (
 	commandRenameSession   commandID = "rename-session"
 	commandNewSession      commandID = "new-session"
 	commandTemplateSession commandID = "template-session"
+	commandClearTemplate   commandID = "clear-template-memory"
 	commandPathSearch      commandID = "path-search"
 	commandCycleRoot       commandID = "cycle-root"
 	commandReload          commandID = "reload"
@@ -4072,13 +4109,19 @@ func (m Model) commandItems() []commandItem {
 	if m.commandPreviousMode == modePathSearch {
 		specs := m.pathSearchCommandSpecs()
 		templateReason := ""
+		clearTemplateReason := ""
 		if len(m.pathResult) == 0 {
 			templateReason = "There is no selected path result."
+			clearTemplateReason = "There is no selected path result."
 		} else if selected, ok := m.selectedPath(); ok {
 			if path, _, targetOK := m.namedSessionTarget(selected); !targetOK {
 				templateReason = "The selected path result has no path."
+				clearTemplateReason = "The selected path result has no path."
 			} else if _, exists := m.sessionForPath(path); exists {
 				templateReason = "A tmux session already exists for the selected path."
+				clearTemplateReason = m.templateMemoryDisabledReason(path)
+			} else {
+				clearTemplateReason = m.templateMemoryDisabledReason(path)
 			}
 		}
 		typedReason := ""
@@ -4094,12 +4137,13 @@ func (m Model) commandItems() []commandItem {
 			commandItemFromSpec(specs[1], templateReason == "", templateReason),
 			commandItemFromSpec(specs[2], typedReason == "", typedReason),
 			commandItemFromSpec(specs[3], createReason == "", createReason),
-			commandItemFromSpec(specs[4], true, ""),
+			commandItemFromSpec(specs[4], clearTemplateReason == "", clearTemplateReason),
 			commandItemFromSpec(specs[5], true, ""),
 			commandItemFromSpec(specs[6], true, ""),
 			commandItemFromSpec(specs[7], true, ""),
 			commandItemFromSpec(specs[8], true, ""),
 			commandItemFromSpec(specs[9], true, ""),
+			commandItemFromSpec(specs[10], true, ""),
 		}
 	}
 	specs := m.browseCommandSpecs()
@@ -4108,11 +4152,13 @@ func (m Model) commandItems() []commandItem {
 	sessionReason := ""
 	createNamedReason := ""
 	templateReason := ""
+	clearTemplateReason := ""
 	if !ok {
 		killReason = "There is no selected candidate."
 		sessionReason = "There is no selected candidate."
 		createNamedReason = "There is no selected candidate."
 		templateReason = "There is no selected candidate."
+		clearTemplateReason = "There is no selected candidate."
 	} else if selected.kind != candidateSession {
 		killReason = "The selected candidate is not an open tmux session."
 		sessionReason = "The selected candidate is not an open tmux session."
@@ -4123,8 +4169,12 @@ func (m Model) commandItems() []commandItem {
 		if path, _, targetOK := m.namedSessionTarget(selected); !targetOK {
 			createNamedReason = "The selected candidate has no path."
 			templateReason = "The selected candidate has no path."
+			clearTemplateReason = "The selected candidate has no path."
 		} else if _, exists := m.sessionForPath(path); exists {
 			templateReason = "A tmux session already exists for the selected path."
+			clearTemplateReason = m.templateMemoryDisabledReason(path)
+		} else {
+			clearTemplateReason = m.templateMemoryDisabledReason(path)
 		}
 	}
 	return []commandItem{
@@ -4134,13 +4184,27 @@ func (m Model) commandItems() []commandItem {
 		commandItemFromSpec(specs[3], sessionReason == "", sessionReason),
 		commandItemFromSpec(specs[4], createNamedReason == "", createNamedReason),
 		commandItemFromSpec(specs[5], templateReason == "", templateReason),
-		commandItemFromSpec(specs[6], m.pathConfig.enabled, "Path search is disabled in config."),
-		commandItemFromSpec(specs[7], true, ""),
+		commandItemFromSpec(specs[6], clearTemplateReason == "", clearTemplateReason),
+		commandItemFromSpec(specs[7], m.pathConfig.enabled, "Path search is disabled in config."),
 		commandItemFromSpec(specs[8], true, ""),
 		commandItemFromSpec(specs[9], true, ""),
 		commandItemFromSpec(specs[10], true, ""),
 		commandItemFromSpec(specs[11], true, ""),
+		commandItemFromSpec(specs[12], true, ""),
 	}
+}
+
+func (m Model) templateMemoryDisabledReason(path string) string {
+	if m.templateMemory == nil {
+		return "Template memory is not available."
+	}
+	if strings.TrimSpace(path) == "" {
+		return "The selected workspace has no path."
+	}
+	if _, ok := m.templateMemory.Lookup(path); !ok {
+		return "The selected workspace has no template memory."
+	}
+	return ""
 }
 
 func commandItemFromSpec(spec commandSpec, enabled bool, disabledReason string) commandItem {
@@ -4176,6 +4240,7 @@ func pathSearchCommandSpecsFor(keys config.KeyBindings) []commandSpec {
 		{ID: commandTemplateSession, Title: "Create selected result from template", Key: keyListLabel(keys.PathSearch.TemplateSession), Description: "Choose a configured session template for the selected fuzzy path result."},
 		{ID: commandOpenTyped, Title: "Open typed path", Key: keyListLabel(keys.PathSearch.OpenTyped), Description: "Open the exact typed prompt path when it exists as a directory."},
 		{ID: commandCreateTyped, Title: "Add typed path", Key: keyListLabel(keys.PathSearch.CreateTyped), Description: "Create the exact typed prompt path after confirmation, then create or switch to its tmux session."},
+		{ID: commandClearTemplate, Title: "Clear selected result template memory", Key: "command palette", Description: "Forget the remembered template or no-template choice for the selected path result."},
 		{ID: commandCycleRoot, Title: "Cycle prompt root", Key: keyListLabel(keys.PathSearch.CycleRoot), Description: "Cycle the path prompt through ~/ / ./ ../."},
 		{ID: commandToggleHidden, Title: "Toggle hidden path results", Key: keyListLabel(keys.PathSearch.ToggleHidden), Description: "Toggle whether hidden directories are skipped in the current path search."},
 		{ID: commandToggleIgnored, Title: "Toggle gitignored path results", Key: keyListLabel(keys.PathSearch.ToggleIgnored), Description: "Toggle whether gitignored directories are skipped in the current path search."},
@@ -4201,6 +4266,7 @@ func browseCommandSpecsFor(keys config.KeyBindings) []commandSpec {
 		{ID: commandRenameSession, Title: "Rename selected session", Key: keyListLabel(keys.Browse.RenameSession), Description: "Rename the selected open tmux session."},
 		{ID: commandNewSession, Title: "Create named session", Key: keyListLabel(keys.Browse.NewSession), Description: "Create a new named tmux session from the selected row's path and kind."},
 		{ID: commandTemplateSession, Title: "Create session from template", Key: keyListLabel(keys.Browse.TemplateSession), Description: "Choose a configured session template for the selected workspace."},
+		{ID: commandClearTemplate, Title: "Clear selected template memory", Key: "command palette", Description: "Forget the remembered template or no-template choice for the selected workspace."},
 		{ID: commandPathSearch, Title: "Create session from path", Key: keyListLabel(keys.Browse.PathSearch), Description: "Open filesystem path search, then create or switch to a session for the selected path."},
 		{ID: commandToggleHidden, Title: "Toggle hidden configured paths", Key: keyListLabel(keys.Browse.ToggleHidden), Description: "Toggle whether hidden directories are skipped for configured repos and subdirs."},
 		{ID: commandToggleIgnored, Title: "Toggle gitignored configured paths", Key: keyListLabel(keys.Browse.ToggleIgnored), Description: "Toggle whether gitignored directories are skipped for configured repos and subdirs."},
@@ -4441,6 +4507,18 @@ func (m Model) runCommand(item commandItem) (tea.Model, tea.Cmd) {
 			return m.openPathTemplatePicker()
 		}
 		return m.openTemplatePicker()
+	case commandClearTemplate:
+		path, ok := m.selectedTemplateMemoryPath()
+		if !ok {
+			return m.notifyCommandUnavailable(item), nil
+		}
+		m.loading = true
+		if m.commandPreviousMode == modePathSearch {
+			m.mode = modePathSearch
+		} else {
+			m.mode = modeBrowse
+		}
+		return m, m.clearTemplateMemory(path)
 	case commandPathSearch:
 		return m.openPathSearch()
 	case commandCycleRoot:
@@ -4487,6 +4565,23 @@ func (m Model) runCommand(item commandItem) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	return m, nil
+}
+
+func (m Model) selectedTemplateMemoryPath() (string, bool) {
+	if m.commandPreviousMode == modePathSearch {
+		selected, ok := m.selectedPath()
+		if !ok {
+			return "", false
+		}
+		path, _, ok := m.namedSessionTarget(selected)
+		return path, ok
+	}
+	selected, ok := m.selected()
+	if !ok {
+		return "", false
+	}
+	path, _, ok := m.namedSessionTarget(selected)
+	return path, ok
 }
 
 func (m Model) notifyCommandUnavailable(item commandItem) Model {
@@ -5643,14 +5738,15 @@ func helpItemsForModeWithKeys(previous mode, keys config.KeyBindings) []helpItem
 			helpItemFromSpec(specs[1]),
 			helpItemFromSpec(specs[2]),
 			helpItemFromSpec(specs[3]),
-			{Key: keyListLabel(keys.PathSearch.OpenLastSession), Action: "open last session", Description: "Switch to tmux's last active session."},
 			helpItemFromSpec(specs[4]),
+			{Key: keyListLabel(keys.PathSearch.OpenLastSession), Action: "open last session", Description: "Switch to tmux's last active session."},
 			helpItemFromSpec(specs[5]),
 			helpItemFromSpec(specs[6]),
 			helpItemFromSpec(specs[7]),
-			{Key: keyListLabel(keys.PathSearch.CommandPalette), Action: "command palette", Description: "Open the command palette for path-search actions."},
 			helpItemFromSpec(specs[8]),
+			{Key: keyListLabel(keys.PathSearch.CommandPalette), Action: "command palette", Description: "Open the command palette for path-search actions."},
 			helpItemFromSpec(specs[9]),
+			helpItemFromSpec(specs[10]),
 		}
 	}
 	if previous == modeCommands {
@@ -5667,7 +5763,7 @@ func helpItemsForModeWithKeys(previous mode, keys config.KeyBindings) []helpItem
 			{Key: keyListLabel(keys.Commands.Close), Action: "close palette", Description: "Close the command palette and return to the previous mode."},
 			{Key: keyListLabel(keys.Help.Close), Action: "close help", Description: "Close help and return to the command palette."},
 			{Key: keyListLabel(keys.Commands.Help), Action: "toggle help", Description: "Show or close this help popup."},
-			{Key: "Quit command", Action: specs[11].Title, Description: specs[11].Description},
+			{Key: "Quit command", Action: specs[12].Title, Description: specs[12].Description},
 		}
 	}
 	specs := browseCommandSpecsFor(keys)
@@ -5686,12 +5782,13 @@ func helpItemsForModeWithKeys(previous mode, keys config.KeyBindings) []helpItem
 		helpItemFromSpec(specs[3]),
 		helpItemFromSpec(specs[4]),
 		helpItemFromSpec(specs[5]),
-		helpItemFromSpec(specs[8]),
 		helpItemFromSpec(specs[6]),
 		helpItemFromSpec(specs[7]),
-		helpItemFromSpec(specs[2]),
 		helpItemFromSpec(specs[9]),
+		helpItemFromSpec(specs[8]),
+		helpItemFromSpec(specs[2]),
 		helpItemFromSpec(specs[10]),
 		helpItemFromSpec(specs[11]),
+		helpItemFromSpec(specs[12]),
 	}
 }
