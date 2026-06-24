@@ -2263,7 +2263,7 @@ func (m *Model) clearVisibleError() bool {
 }
 
 func (m Model) listLimit() int {
-	return m.availableListRows(len(m.filtered) + m.dividerCount())
+	return m.availableListRows(len(m.filtered) + m.dividerCount() + m.browseFixedRows())
 }
 
 func (m Model) availableListRows(visibleRows int) int {

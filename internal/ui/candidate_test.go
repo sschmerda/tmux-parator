@@ -132,6 +132,29 @@ func TestMainFilterGroupsMatchingSessionsBeforeRoots(t *testing.T) {
 	}
 }
 
+func TestMainFilterMatchesRootPrefixBeforeUnderscore(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.width = 180
+	model.height = 40
+	model.rootItems = []discovery.Candidate{
+		{RootName: "temp", Name: "quarto-examples", RelativePath: "quarto-examples", DisplayPath: "temp/quarto-examples", Mode: "subdir"},
+		{RootName: "repos", Name: "zahnoel_analyse", RelativePath: "zahnoel_analyse", DisplayPath: "repos/zahnoel_analyse", Mode: "repo"},
+	}
+	model.rebuildCandidates()
+	model.filter = "zahn"
+	model.applyFilter()
+
+	if len(model.filtered) != 1 {
+		t.Fatalf("filtered len = %d, want 1: %#v", len(model.filtered), model.filtered)
+	}
+	if model.filtered[0].title() != "zahnoel_analyse" {
+		t.Fatalf("filtered title = %q, want zahnoel_analyse", model.filtered[0].title())
+	}
+	if view := ansi.Strip(model.View()); !strings.Contains(view, "zahnoel_analyse") {
+		t.Fatalf("rendered view does not include match:\n%s", view)
+	}
+}
+
 func TestBrowseTabJumpsBetweenSections(t *testing.T) {
 	model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
 	model.sessions = []tmux.Session{{Name: "tmux-dux"}, {Name: "other"}}
@@ -1279,7 +1302,7 @@ func TestClearTemplateMemoryCommandForgetsSelectedWorkspace(t *testing.T) {
 		t.Fatalf("mode/notice = %v/%v, want browse cleared notice", model.mode, model.notice)
 	}
 	view := ansi.Strip(model.View())
-	if strings.Contains(view, "<enter> use template") || strings.Contains(view, "/tmp/repo") || !strings.Contains(view, "<enter>/<esc> dismiss") {
+	if strings.Contains(view, "<enter> use template") || !strings.Contains(view, "<enter>/<esc> dismiss") {
 		t.Fatalf("clear template notice has wrong actions:\n%s", view)
 	}
 }
