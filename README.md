@@ -566,8 +566,26 @@ switches to it.
 
 ## Session Templates
 
-Session templates live next to the main config in a `templates/` directory.
-The normal config layout is:
+Session templates describe how a newly selected workspace should become a tmux
+session. They can name the session, create multiple windows and panes, run
+startup commands, ask for interactive choices, set session-local environment
+variables, and run setup hooks before or after the tmux layout is created.
+
+Use templates for repeatable workspace shapes:
+
+- A repository layout with editor, tests, Git status, and an agent window.
+- A documentation layout with notes, preview, and search panes.
+- A service layout that sets `COMPOSE_PROJECT_NAME`, opens logs, and starts a
+  shell in the project root.
+- A project-local layout stored in the repository itself.
+
+Templates are only used when `tmux-parator` creates a new session. Existing
+tmux sessions are switched to directly and are not recreated from the template.
+
+### Template Files
+
+Templates live next to the main config in a `templates/` directory. The normal
+config layout is:
 
 ```text
 ~/.config/tmux-parator/
@@ -609,7 +627,32 @@ or, when `XDG_CONFIG_HOME` is unset:
 `TMUX_PARATOR_SESSION_CONFIG` overrides all of these paths. It can point to a
 config directory or a single template file.
 
-Local template example:
+### Minimal Template
+
+A minimal template creates one tmux window with one pane:
+
+```toml
+id = "editor"
+name = "Editor"
+focus = "main.editor"
+
+[[windows]]
+name = "main"
+
+[windows.layout]
+type = "pane"
+name = "editor"
+path = "."
+command = "nvim ."
+```
+
+`focus` identifies the pane that should be selected when the session opens. The
+path is written as `window.pane`, or `window.group.pane` for nested layouts.
+
+### Local Template Example
+
+Store this as `.tmux-parator/template.toml` inside a workspace when one project
+needs its own layout:
 
 ```toml
 id = "local"
@@ -661,8 +704,10 @@ type = "pane"
 command = "git status --short"
 ```
 
-See `examples/tmux-parator/` for a complete example directory. This is
-`examples/tmux-parator/templates/repo.toml`:
+### Repository Template Example
+
+See `examples/tmux-parator/` for a complete example directory with scripts.
+This is `examples/tmux-parator/templates/repo.toml`:
 
 ```toml
 id = "repo"
@@ -768,6 +813,178 @@ name = "notes"
 path = "docs"
 script = ["setup.sh", "notes.sh"]
 ```
+
+### Matching Workspaces
+
+Templates can match paths automatically:
+
+```toml
+id = "repo"
+name = "Repository"
+match = ["~/stefan/code/repos/*", "~/work/client-a"]
+```
+
+When Enter creates a new session for a configured root result or path-search
+result, `tmux-parator` chooses the most specific enabled matching template.
+Exact paths win over broader globs, and deeper paths win over parent paths.
+
+`match = ["~/stefan/code/repos/*"]` matches one directory level below
+`~/stefan/code/repos`, such as `~/stefan/code/repos/tmux-parator`. It does not
+match `~/stefan/code/repos/client/api`. Add another pattern for another tree or
+use a broader plain directory path when every descendant should use the same
+template:
+
+```toml
+match = ["~/stefan/code/repos"]
+```
+
+Plain directory paths act as subtree matches, so the example above applies to
+all paths below `~/stefan/code/repos`.
+
+### Interactive Parameters
+
+Use parameters when one template should support a small number of choices:
+
+```toml
+[[parameters]]
+name = "agent"
+prompt = "Coding agent"
+options = ["codex", "opencode", "none"]
+default = "codex"
+
+[[windows]]
+name = "agent"
+when = '{agent} != "none"'
+
+[windows.layout]
+type = "pane"
+name = "agent"
+command = "{agent}"
+```
+
+The selected value becomes an interpolation variable. Parameter values are
+remembered per workspace when template memory is enabled by normal use, so
+opening the same workspace again can reuse the previous selection.
+
+### Variables And Environment
+
+Use `[variables]` for reusable template strings:
+
+```toml
+[variables]
+window_prefix = "{session_name}-work"
+editor_command = "nvim {workspace_path}"
+```
+
+Use `[env]` for tmux session-local environment values:
+
+```toml
+[env]
+PROJECT_ROOT = "{workspace_path}"
+APP_ENV = "development"
+COMPOSE_PROJECT_NAME = "{workspace_name}"
+```
+
+Environment values are set on the created tmux session and inherited by panes
+in that session. They do not modify the global shell environment and do not
+leak to other tmux sessions. Inspect them with:
+
+```sh
+tmux show-environment -t <session-name>
+```
+
+### Layout Examples
+
+A two-column layout:
+
+```toml
+[[windows]]
+name = "main"
+focus = "editor"
+
+[windows.layout]
+type = "columns"
+sizes = [70, 30]
+children = ["editor", "git"]
+
+[windows.layout.editor]
+type = "pane"
+command = "nvim ."
+
+[windows.layout.git]
+type = "pane"
+command = "git status --short"
+```
+
+A nested editor-plus-tests layout:
+
+```toml
+[[windows]]
+name = "work"
+focus = "main.editor"
+
+[windows.layout]
+type = "columns"
+sizes = [25, 75]
+children = ["shell", "main"]
+
+[windows.layout.shell]
+type = "pane"
+command = "git branch --show-current"
+
+[windows.layout.main]
+type = "rows"
+sizes = [80, 20]
+children = ["editor", "tests"]
+
+[windows.layout.main.editor]
+type = "pane"
+command = "nvim ."
+
+[windows.layout.main.tests]
+type = "pane"
+command = "go test ./..."
+```
+
+`columns` split left-to-right and `rows` split top-to-bottom. The `sizes` list
+contains relative weights, not percentages.
+
+### Hooks And Scripts
+
+Hooks run outside tmux panes and are best for setup steps that should succeed
+before the workspace is considered ready:
+
+```toml
+[[hooks.before_create_command]]
+run = "git fetch --quiet"
+kinds = ["repo"]
+
+[[hooks.after_create_script]]
+run = "ready.sh"
+```
+
+Scripts are resolved from `templates/scripts/` next to the template file. Hook
+failures are reported as creation errors. A failed `before_create` hook prevents
+session creation; a failed `after_create` hook rolls back the partially created
+tmux session.
+
+Pane `command` and `script` entries are different from hooks: they run inside
+their target pane and are intended to be visible as part of the started
+workspace.
+
+### Template Selection Flow
+
+When opening a workspace:
+
+1. Existing tmux sessions are switched to directly.
+2. A local `.tmux-parator/template.toml` takes precedence for new sessions.
+3. A remembered template or remembered no-template choice is offered next.
+4. The most specific configured `match` is used next.
+5. If none applies, a plain session is created.
+
+Use `Ctrl-l` to open the template picker explicitly. The picker includes a
+`No template` option and fuzzy-searches template chips, names, ids,
+descriptions, and window indicators.
 
 Session template fields:
 
