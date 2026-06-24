@@ -18,6 +18,7 @@ import (
 	"github.com/sschmerda/tmux-parator/internal/fuzzy"
 	"github.com/sschmerda/tmux-parator/internal/pathsearch"
 	"github.com/sschmerda/tmux-parator/internal/sessionconfig"
+	"github.com/sschmerda/tmux-parator/internal/templatememory"
 	"github.com/sschmerda/tmux-parator/internal/theme"
 	"github.com/sschmerda/tmux-parator/internal/tmux"
 )
@@ -2033,6 +2034,49 @@ type fakeSessionClient struct {
 	taggedMetadata      tmux.SessionMetadata
 }
 
+type fakeTemplateMemory struct {
+	associations         map[string]templatememory.Association
+	rememberedPath       string
+	rememberedTemplateID string
+	rememberedParameters map[string]string
+	rememberedNoTemplate string
+	forgottenPath        string
+}
+
+func (f *fakeTemplateMemory) Lookup(path string) (templatememory.Association, bool) {
+	association, ok := f.associations[path]
+	return association, ok
+}
+
+func (f *fakeTemplateMemory) Remember(path string, templateID string, parameters map[string]string) error {
+	f.rememberedPath = path
+	f.rememberedTemplateID = templateID
+	f.rememberedParameters = cloneStringMap(parameters)
+	if f.associations == nil {
+		f.associations = make(map[string]templatememory.Association)
+	}
+	f.associations[path] = templatememory.Association{
+		TemplateID: templateID,
+		Parameters: cloneStringMap(parameters),
+	}
+	return nil
+}
+
+func (f *fakeTemplateMemory) RememberNoTemplate(path string) error {
+	f.rememberedNoTemplate = path
+	if f.associations == nil {
+		f.associations = make(map[string]templatememory.Association)
+	}
+	f.associations[path] = templatememory.Association{WithoutTemplate: true}
+	return nil
+}
+
+func (f *fakeTemplateMemory) Forget(path string) error {
+	f.forgottenPath = path
+	delete(f.associations, path)
+	return nil
+}
+
 func (f *fakeSessionClient) ListSessions(context.Context) ([]tmux.Session, error) {
 	return nil, nil
 }
@@ -3265,6 +3309,110 @@ func TestBrowseEnterUsesLocalTemplateAfterNotice(t *testing.T) {
 	}
 }
 
+func TestBrowseEnterConfirmsRememberedTemplateBeforeConfiguredMatch(t *testing.T) {
+	client := &fakeSessionClient{}
+	memory := &fakeTemplateMemory{
+		associations: map[string]templatememory.Association{
+			"/tmp/repos/repo": {
+				TemplateID: "remembered",
+				Parameters: map[string]string{"editor": "vim"},
+			},
+		},
+	}
+	remembered := testTemplate("remembered", "Remembered Workspace")
+	remembered.Source = sessionconfig.SourceGlobal
+	remembered.Parameters = []sessionconfig.Parameter{{
+		Name:    "editor",
+		Prompt:  "Editor",
+		Options: []string{"nvim", "vim"},
+		Default: "nvim",
+	}}
+	matched := templateWithMatch("matched", "Matched Workspace", "/tmp/repos/*")
+	matched.Source = sessionconfig.SourceGlobal
+	model := NewModelWithTemplateMemory(
+		client,
+		theme.Default(),
+		nil,
+		discovery.Options{},
+		config.PathSearch{},
+		config.Glyphs{},
+		config.GlyphColors{},
+		config.Columns{},
+		config.Default().UI.Keys,
+		[]sessionconfig.Template{remembered, matched},
+		memory,
+	)
+	model.rootItems = []discovery.Candidate{{Name: "repo", Path: "/tmp/repos/repo", Mode: "repo"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd != nil || model.notice == nil || !strings.Contains(model.notice.Error(), `template "Remembered Workspace" is associated`) {
+		t.Fatalf("cmd/notice = %#v/%v, want remembered-template notice", cmd, model.notice)
+	}
+	model.width = 96
+	model.height = 24
+	view := ansi.Strip(model.View())
+	if !strings.Contains(view, "<enter> use template") || !strings.Contains(view, "<esc> dismiss") {
+		t.Fatalf("remembered-template notice actions missing:\n%s", view)
+	}
+
+	updated, cmd = model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("remembered template confirmation returned nil command")
+	}
+	msg := cmd()
+	if created, ok := msg.(createdMsg); !ok || created.err != nil {
+		t.Fatalf("cmd msg = %#v, want successful createdMsg", msg)
+	}
+	if model.mode != modeBrowse || !model.loading {
+		t.Fatalf("mode/loading = %v/%v, want browse/loading", model.mode, model.loading)
+	}
+	if client.templateID != "remembered" || client.templateVariables["editor"] != "vim" {
+		t.Fatalf("template = %q variables %#v, want remembered editor vim", client.templateID, client.templateVariables)
+	}
+}
+
+func TestSuccessfulTemplateCreationRemembersTemplateAndParameters(t *testing.T) {
+	client := &fakeSessionClient{}
+	memory := &fakeTemplateMemory{}
+	template := testTemplate("repo", "Repository")
+	template.Source = sessionconfig.SourceGlobal
+	model := NewModelWithTemplateMemory(
+		client,
+		theme.Default(),
+		nil,
+		discovery.Options{},
+		config.PathSearch{},
+		config.Glyphs{},
+		config.GlyphColors{},
+		config.Columns{},
+		config.Default().UI.Keys,
+		[]sessionconfig.Template{template},
+		memory,
+	)
+
+	_, cmd := model.finishTemplateCreation(
+		template,
+		"repo",
+		"/tmp/repos/repo",
+		tmux.SessionMetadata{Kind: "repo"},
+		modeBrowse,
+		map[string]string{"editor": "nvim"},
+	)
+	if cmd == nil {
+		t.Fatal("finishTemplateCreation returned nil command")
+	}
+	if msg := cmd(); msg.(createdMsg).err != nil {
+		t.Fatalf("createdMsg error = %v", msg.(createdMsg).err)
+	}
+	if memory.rememberedPath != "/tmp/repos/repo" || memory.rememberedTemplateID != "repo" || memory.rememberedParameters["editor"] != "nvim" {
+		t.Fatalf("remembered = %q/%q/%#v", memory.rememberedPath, memory.rememberedTemplateID, memory.rememberedParameters)
+	}
+}
+
 func TestPathSearchEnterUsesMatchingTemplate(t *testing.T) {
 	client := &fakeSessionClient{}
 	model := NewModelWithTemplates(
@@ -3427,7 +3575,15 @@ func TestTemplatePickerCreatesSelectedTemplate(t *testing.T) {
 
 func TestTemplatePickerCanCreateWithoutTemplate(t *testing.T) {
 	client := &fakeSessionClient{}
-	model := NewModelWithTemplates(
+	memory := &fakeTemplateMemory{
+		associations: map[string]templatememory.Association{
+			"/tmp/repo": {
+				TemplateID: "zen",
+				Parameters: map[string]string{"agent": "codex"},
+			},
+		},
+	}
+	model := NewModelWithTemplateMemory(
 		client,
 		theme.Default(),
 		nil,
@@ -3438,6 +3594,7 @@ func TestTemplatePickerCanCreateWithoutTemplate(t *testing.T) {
 		config.Columns{},
 		config.Default().UI.Keys,
 		[]sessionconfig.Template{testTemplate("zen", "Zen")},
+		memory,
 	)
 	model.rootItems = []discovery.Candidate{{Name: "repo", Path: "/tmp/repo", Mode: "repo"}}
 	model.rebuildCandidates()
@@ -3463,8 +3620,31 @@ func TestTemplatePickerCanCreateWithoutTemplate(t *testing.T) {
 	if client.templateID != "" || client.templateSessionName != "" {
 		t.Fatalf("template create used: %#v", client)
 	}
+	if memory.rememberedNoTemplate != "/tmp/repo" {
+		t.Fatalf("rememberedNoTemplate = %q, want /tmp/repo", memory.rememberedNoTemplate)
+	}
 	if model.mode != modeBrowse || !model.loading {
 		t.Fatalf("mode/loading = %v/%v, want browse/loading", model.mode, model.loading)
+	}
+
+	client = &fakeSessionClient{}
+	model.client = client
+	model.loading = false
+	model.sessions = nil
+	updated, cmd = model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("enter after remembered no-template returned nil command")
+	}
+	msg = cmd()
+	if created, ok := msg.(createdMsg); !ok || created.err != nil {
+		t.Fatalf("cmd msg = %#v, want successful createdMsg", msg)
+	}
+	if client.newSessionName != "repo" || client.newSessionPath != "/tmp/repo" {
+		t.Fatalf("plain recreate = (%q,%q), want repo /tmp/repo", client.newSessionName, client.newSessionPath)
+	}
+	if client.templateID != "" || model.mode == modeTemplateParameter {
+		t.Fatalf("remembered no-template reopened template flow: mode %v client %#v", model.mode, client)
 	}
 }
 

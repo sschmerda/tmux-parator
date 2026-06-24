@@ -832,12 +832,12 @@ Layout rules:
   from the directory containing the template file.
 - When Enter creates a new session for a root or path-search result, the most
   specific enabled template whose `match` pattern matches the selected path is
-  used automatically. Deeper paths win over broader parents, and exact paths
-  win over globs. Existing path sessions are still switched to instead of
-  recreated. `Ctrl-l` always opens the template picker for manual selection,
-  including a no-template option. The picker shows chips, names, and window
-  indicators, and fuzzy-searches chips, names, ids, descriptions, and window
-  indicators.
+  used automatically unless a local or remembered template takes precedence.
+  Deeper paths win over broader parents, and exact paths win over globs.
+  Existing path sessions are still switched to instead of recreated. `Ctrl-l`
+  always opens the template picker for manual selection, including a
+  no-template option. The picker shows chips, names, and window indicators, and
+  fuzzy-searches chips, names, ids, descriptions, and window indicators.
 - `command` and `script` are mutually exclusive. Use `command` for inline
   commands and `script` for dotfile-managed scripts such as
   `~/.config/tmux-parator/templates/scripts/setup.sh`.
@@ -985,6 +985,34 @@ window and pane names must remain non-empty and unique, and expanded focus paths
 must resolve to panes. A failure therefore cannot leave a partially created
 session.
 
+### Template Memory
+
+After a global template successfully creates a workspace session,
+`tmux-parator` remembers the template id and selected parameter values for that
+workspace path. The next time Enter opens that workspace without an existing
+tmux session or local template, a notice identifies the associated template.
+Enter confirms it, while Escape cancels. Remembered parameter values are
+preselected in the parameter popup.
+
+Template selection precedence is:
+
+1. A workspace-local `.tmux-parator/template.toml`.
+2. The remembered global template for the workspace path.
+3. The most specific configured `match`.
+4. Normal session creation without a template.
+
+Choosing `No template` from the template picker remembers that explicit choice
+for the workspace after the normal session is created successfully. Later
+`Enter` opens the workspace without falling through to a matching template.
+
+The state file is stored at
+`$XDG_STATE_HOME/tmux-parator/state.json`, or
+`~/.local/state/tmux-parator/state.json` when `XDG_STATE_HOME` is unset.
+`TMUX_PARATOR_STATE` can override the path. State writes are atomic. On load and
+save, entries are removed when the workspace directory or template no longer
+exists. The file is written newest-first, and the least recently used entries
+are evicted above a hard limit of 2000 workspaces.
+
 ## Session Names And Metadata
 
 `tmux-parator` keeps tmux session names short and readable:
@@ -1084,8 +1112,8 @@ avoid required dependencies on fuzzy finders or preview tools.
 
 ### v0.6
 
-- Add layout memory.
-- Add state file.
+- Add template/layout memory.
+- Add bounded state file.
 - Add script layout backend.
 
 ### v0.7+

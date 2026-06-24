@@ -20,6 +20,7 @@ import (
 	"github.com/sschmerda/tmux-parator/internal/fuzzy"
 	"github.com/sschmerda/tmux-parator/internal/pathsearch"
 	"github.com/sschmerda/tmux-parator/internal/sessionconfig"
+	"github.com/sschmerda/tmux-parator/internal/templatememory"
 	"github.com/sschmerda/tmux-parator/internal/theme"
 	"github.com/sschmerda/tmux-parator/internal/tmux"
 )
@@ -34,6 +35,13 @@ type sessionClient interface {
 	NewSessionWithLayout(context.Context, string, string, tmux.SessionMetadata, sessionconfig.Template) error
 	NewSessionWithLayoutAndSwitch(context.Context, string, string, tmux.SessionMetadata, sessionconfig.Template) error
 	TagSession(context.Context, string, tmux.SessionMetadata) error
+}
+
+type templateMemory interface {
+	Lookup(string) (templatememory.Association, bool)
+	Remember(string, string, map[string]string) error
+	RememberNoTemplate(string) error
+	Forget(string) error
 }
 
 type mode int
@@ -70,6 +78,7 @@ type Model struct {
 	keys                  config.KeyBindings
 	templates             []sessionconfig.Template
 	matchingTemplates     []sessionconfig.Template
+	templateMemory        templateMemory
 	sessions              []tmux.Session
 	rootItems             []discovery.Candidate
 	candidates            []candidate
@@ -95,6 +104,7 @@ type Model struct {
 	pendingTemplatePath   string
 	pendingTemplateMeta   tmux.SessionMetadata
 	pendingTemplate       sessionconfig.Template
+	pendingTemplateValues map[string]string
 	renameText            string
 	renameOriginal        string
 	cursor                int
@@ -245,6 +255,10 @@ func NewModelWithKeys(client sessionClient, activeTheme theme.Theme, roots []con
 }
 
 func NewModelWithTemplates(client sessionClient, activeTheme theme.Theme, roots []config.Root, discoveryOptions discovery.Options, pathSearch config.PathSearch, glyphs config.Glyphs, glyphColors config.GlyphColors, columns config.Columns, keys config.KeyBindings, templates []sessionconfig.Template, dialogs ...config.Dialogs) Model {
+	return NewModelWithTemplateMemory(client, activeTheme, roots, discoveryOptions, pathSearch, glyphs, glyphColors, columns, keys, templates, nil, dialogs...)
+}
+
+func NewModelWithTemplateMemory(client sessionClient, activeTheme theme.Theme, roots []config.Root, discoveryOptions discovery.Options, pathSearch config.PathSearch, glyphs config.Glyphs, glyphColors config.GlyphColors, columns config.Columns, keys config.KeyBindings, templates []sessionconfig.Template, memory templateMemory, dialogs ...config.Dialogs) Model {
 	glyphs = normalizeUIGlyphs(glyphs)
 	glyphColors = normalizeUIGlyphColors(glyphColors)
 	columns = normalizeUIColumns(columns)
@@ -267,6 +281,7 @@ func NewModelWithTemplates(client sessionClient, activeTheme theme.Theme, roots 
 		keys:              keys,
 		templates:         sessionconfig.EnabledTemplates(templates),
 		matchingTemplates: sessionconfig.EnabledTemplatesInOrder(templates),
+		templateMemory:    memory,
 		pathConfig: pathsearchConfig{
 			enabled: pathSearch.Enabled,
 			roots:   pathSearch.Roots,
@@ -492,8 +507,9 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				path := m.pendingTemplatePath
 				metadata := m.pendingTemplateMeta
 				template := m.pendingTemplate
+				values := m.pendingTemplateValues
 				m.clearPendingTemplate()
-				return m.beginTemplateCreation(template, fallbackName, path, metadata, modeBrowse)
+				return m.beginTemplateCreationWithValues(template, fallbackName, path, metadata, modeBrowse, values)
 			}
 			m.clearPendingTemplate()
 		}
@@ -831,7 +847,7 @@ func (m Model) updateTemplateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			name := m.availableSessionName(fallbackName)
 			metadata.BaseName = fallbackName
-			return m, m.createSessionWithMetadata(name, path, metadata)
+			return m, m.createSessionWithoutTemplate(name, path, metadata)
 		}
 		if len(template.Parameters) > 0 {
 			return m.beginTemplateCreation(template, fallbackName, path, metadata, modeTemplatePicker)
@@ -2691,9 +2707,23 @@ func (m Model) createSessionWithMetadata(name string, path string, metadata tmux
 	}
 }
 
-func (m Model) createSessionWithTemplate(name string, path string, metadata tmux.SessionMetadata, template sessionconfig.Template) tea.Cmd {
+func (m Model) createSessionWithoutTemplate(name string, path string, metadata tmux.SessionMetadata) tea.Cmd {
 	return func() tea.Msg {
-		return createdMsg{name: name, switched: true, err: m.client.NewSessionWithLayoutAndSwitch(context.Background(), name, path, metadata, template)}
+		err := m.client.NewSession(context.Background(), name, path, metadata)
+		if err == nil && m.templateMemory != nil {
+			_ = m.templateMemory.RememberNoTemplate(path)
+		}
+		return createdMsg{name: name, err: err}
+	}
+}
+
+func (m Model) createSessionWithTemplate(name string, path string, metadata tmux.SessionMetadata, template sessionconfig.Template, parameters map[string]string) tea.Cmd {
+	return func() tea.Msg {
+		err := m.client.NewSessionWithLayoutAndSwitch(context.Background(), name, path, metadata, template)
+		if err == nil && m.templateMemory != nil && template.Source != sessionconfig.SourceLocal {
+			_ = m.templateMemory.Remember(path, template.ID, parameters)
+		}
+		return createdMsg{name: name, switched: true, err: err}
 	}
 }
 
@@ -2702,6 +2732,7 @@ func (m *Model) clearPendingTemplate() {
 	m.pendingTemplatePath = ""
 	m.pendingTemplateMeta = tmux.SessionMetadata{}
 	m.pendingTemplate = sessionconfig.Template{}
+	m.pendingTemplateValues = nil
 }
 
 func (m Model) loadRoots() tea.Cmd {
@@ -2811,6 +2842,20 @@ func (m Model) openCandidate(selected candidate) (tea.Model, tea.Cmd) {
 			m.notice = fmt.Errorf("local tmux-parator template found: %s", templatePath)
 			return m, nil
 		}
+		if association, ok := m.rememberedTemplate(selected.path()); ok {
+			if association.noTemplate {
+				name := m.availableSessionName(selected.sessionName())
+				metadata.BaseName = selected.sessionName()
+				return m, m.createSessionWithoutTemplate(name, selected.path(), metadata)
+			}
+			m.pendingTemplateName = selected.sessionName()
+			m.pendingTemplatePath = selected.path()
+			m.pendingTemplateMeta = metadata
+			m.pendingTemplate = association.template
+			m.pendingTemplateValues = association.parameters
+			m.notice = fmt.Errorf("template %q is associated with this workspace", association.template.Name)
+			return m, nil
+		}
 		if template, ok := sessionconfig.MatchingTemplate(m.matchingTemplates, selected.path()); ok {
 			return m.beginTemplateCreation(template, selected.sessionName(), selected.path(), metadata, modeBrowse)
 		}
@@ -2879,23 +2924,42 @@ func (m Model) availableTemplateSessionName(template sessionconfig.Template, fal
 }
 
 func (m Model) beginTemplateCreation(template sessionconfig.Template, fallback string, path string, metadata tmux.SessionMetadata, previous mode) (tea.Model, tea.Cmd) {
+	return m.beginTemplateCreationWithValues(template, fallback, path, metadata, previous, nil)
+}
+
+func (m Model) beginTemplateCreationWithValues(template sessionconfig.Template, fallback string, path string, metadata tmux.SessionMetadata, previous mode, values map[string]string) (tea.Model, tea.Cmd) {
 	if len(template.Parameters) > 0 {
+		validValues := validParameterValues(template.Parameters, values)
+		if parameterValuesComplete(template.Parameters, validValues) {
+			rendered, err := sessionconfig.WithParameterValues(template, validValues)
+			if err != nil {
+				m.loading = false
+				if previous == modePathSearch {
+					m.mode = modePathSearch
+				} else {
+					m.mode = modeBrowse
+				}
+				m.notice = err
+				return m, nil
+			}
+			return m.finishTemplateCreation(rendered, fallback, path, metadata, previous, validValues)
+		}
 		m.mode = modeTemplateParameter
 		m.loading = false
 		m.parameterTemplate = template
 		m.parameterPath = path
 		m.parameterFallback = fallback
 		m.parameterMetadata = metadata
-		m.parameterValues = make(map[string]string, len(template.Parameters))
+		m.parameterValues = validValues
 		m.parameterIndex = 0
-		m.parameterCursor = parameterDefaultIndex(template.Parameters[0])
+		m.parameterCursor = parameterSelectedIndex(template.Parameters[0], m.parameterValues)
 		m.parameterPreviousMode = previous
 		return m, nil
 	}
-	return m.finishTemplateCreation(template, fallback, path, metadata, previous)
+	return m.finishTemplateCreation(template, fallback, path, metadata, previous, nil)
 }
 
-func (m Model) finishTemplateCreation(template sessionconfig.Template, fallback string, path string, metadata tmux.SessionMetadata, previous mode) (tea.Model, tea.Cmd) {
+func (m Model) finishTemplateCreation(template sessionconfig.Template, fallback string, path string, metadata tmux.SessionMetadata, previous mode, parameters map[string]string) (tea.Model, tea.Cmd) {
 	name, baseName, err := m.availableTemplateSessionName(template, fallback, path, metadata)
 	if err != nil {
 		m.loading = false
@@ -2913,7 +2977,7 @@ func (m Model) finishTemplateCreation(template sessionconfig.Template, fallback 
 	if previous == modePathSearch {
 		m.stopPathStream()
 	}
-	return m, m.createSessionWithTemplate(name, path, metadata, template)
+	return m, m.createSessionWithTemplate(name, path, metadata, template, parameters)
 }
 
 func (m Model) updateTemplateParameterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -2990,12 +3054,13 @@ func (m Model) updateTemplateParameterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		path := m.parameterPath
 		metadata := m.parameterMetadata
 		previous := m.parameterPreviousMode
+		parameters := cloneStringMap(m.parameterValues)
 		m.clearTemplateParameters()
 		if previous == modeTemplatePicker {
 			previous = m.templatePreviousMode
 			m.closeTemplatePicker()
 		}
-		return m.finishTemplateCreation(template, fallback, path, metadata, previous)
+		return m.finishTemplateCreation(template, fallback, path, metadata, previous, parameters)
 	}
 	return m, nil
 }
@@ -3036,6 +3101,70 @@ func parameterSelectedIndex(parameter sessionconfig.Parameter, values map[string
 		}
 	}
 	return parameterDefaultIndex(parameter)
+}
+
+func validParameterValues(parameters []sessionconfig.Parameter, values map[string]string) map[string]string {
+	valid := make(map[string]string, len(parameters))
+	for _, parameter := range parameters {
+		for _, option := range parameter.Options {
+			if values[parameter.Name] == option {
+				valid[parameter.Name] = option
+				break
+			}
+		}
+	}
+	return valid
+}
+
+func parameterValuesComplete(parameters []sessionconfig.Parameter, values map[string]string) bool {
+	if len(parameters) == 0 {
+		return false
+	}
+	for _, parameter := range parameters {
+		if _, ok := values[parameter.Name]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+type rememberedTemplateAssociation struct {
+	template   sessionconfig.Template
+	parameters map[string]string
+	noTemplate bool
+}
+
+func (m Model) rememberedTemplate(path string) (rememberedTemplateAssociation, bool) {
+	if m.templateMemory == nil {
+		return rememberedTemplateAssociation{}, false
+	}
+	association, ok := m.templateMemory.Lookup(path)
+	if !ok {
+		return rememberedTemplateAssociation{}, false
+	}
+	if association.WithoutTemplate {
+		return rememberedTemplateAssociation{noTemplate: true}, true
+	}
+	for _, template := range m.templates {
+		if template.ID == association.TemplateID {
+			return rememberedTemplateAssociation{
+				template:   template,
+				parameters: validParameterValues(template.Parameters, association.Parameters),
+			}, true
+		}
+	}
+	return rememberedTemplateAssociation{}, false
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func (m Model) hasSession(name string) bool {
