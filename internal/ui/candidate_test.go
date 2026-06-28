@@ -1349,7 +1349,7 @@ func TestPathCommandPaletteCreateTypedPathEnabledOnlyForMissingPath(t *testing.T
 	if !ok {
 		t.Fatal("create typed path command missing")
 	}
-	if item.Title != "Add typed path" || item.Key != "<c-a>" || !item.Enabled {
+	if item.Title != "Add typed path" || item.Key != "<ctrl-a>" || !item.Enabled {
 		t.Fatalf("create typed command = %#v, want title/key/enabled", item)
 	}
 
@@ -1371,7 +1371,7 @@ func TestCommandPaletteIncludesOpenLastOnlyInBrowse(t *testing.T) {
 	if !ok {
 		t.Fatal("open last session command missing from browse palette")
 	}
-	if item.Title != "Open last session" || item.Key != "<c-`>" || !item.Enabled {
+	if item.Title != "Open last session" || item.Key != "<ctrl-`>" || !item.Enabled {
 		t.Fatalf("open last session command = %#v, want title/key/enabled", item)
 	}
 
@@ -1829,7 +1829,7 @@ func TestMainViewUsesStatusChipsInsteadOfPromptStatusLine(t *testing.T) {
 	if strings.Contains(view, "skip hidden | show ignored") {
 		t.Fatalf("view contains old prompt status line:\n%s", view)
 	}
-	if !strings.Contains(view, "HIDDEN SKIP") || !strings.Contains(view, "IGNORED SHOW") {
+	if !strings.Contains(view, "help:  <ctrl-?>") || !strings.Contains(view, "commands:  <ctrl-g>") || !strings.Contains(view, "│") || !strings.Contains(view, "PATH OFF") || !strings.Contains(view, "HIDDEN SKIP") || !strings.Contains(view, "IGNORED SHOW") {
 		t.Fatalf("view missing status chips:\n%s", view)
 	}
 	if strings.Contains(view, "enter open") || strings.Contains(view, "ctrl-? help") {
@@ -1845,11 +1845,96 @@ func TestPathSearchFooterKeepsStatusChipsWithoutHotkeyHelp(t *testing.T) {
 	model.pathResult = []candidate{{kind: candidatePath, fsPath: pathsearch.Candidate{Name: "main", Path: "/tmp/main"}}}
 
 	view := model.View()
-	if !strings.Contains(view, "PATH ON") || !strings.Contains(view, "HIDDEN") || !strings.Contains(view, "IGNORED") {
+	if !strings.Contains(view, "help:  <ctrl-?>") || !strings.Contains(view, "commands:  <ctrl-g>") || !strings.Contains(view, "│") || !strings.Contains(view, "PATH ON") || !strings.Contains(view, "HIDDEN") || !strings.Contains(view, "IGNORED") {
 		t.Fatalf("path search view missing status chips:\n%s", view)
 	}
 	if strings.Contains(view, "enter open") || strings.Contains(view, "ctrl-? help") {
 		t.Fatalf("path search view contains inline hotkey help:\n%s", view)
+	}
+}
+
+func TestFooterUsesConfiguredHelpAndCommandHotkeys(t *testing.T) {
+	keys := config.Default().UI.Keys
+	keys.Browse.Help = []string{"f1"}
+	keys.Browse.CommandPalette = []string{"ctrl+p"}
+	keys.PathSearch.Help = []string{"f2"}
+	keys.PathSearch.CommandPalette = []string{"ctrl+space"}
+
+	model := NewModelWithKeys(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{}, keys)
+	model.width = 120
+	model.height = 20
+	model.sessions = []tmux.Session{{Name: "main"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+	view := ansi.Strip(model.View())
+	if !strings.Contains(view, "help:  f1") || !strings.Contains(view, "commands:  <ctrl-p>") || !strings.Contains(view, "PATH OFF") {
+		t.Fatalf("browse footer missing configured hotkeys:\n%s", view)
+	}
+
+	model.mode = modePathSearch
+	model.pathResult = []candidate{{kind: candidatePath, fsPath: pathsearch.Candidate{Name: "main", Path: "/tmp/main"}}}
+	view = ansi.Strip(model.View())
+	if !strings.Contains(view, "help:  f2") || !strings.Contains(view, "commands:  <ctrl-space>") || !strings.Contains(view, "PATH ON") {
+		t.Fatalf("path footer missing configured hotkeys:\n%s", view)
+	}
+}
+
+func TestFooterControlChipsUseActiveStyleWhenOpen(t *testing.T) {
+	styles := newStyles(theme.Default())
+	helpChip := renderFooterControlChip(footerHelpLabel, "<ctrl-?>", true, styles)
+	commandChip := renderFooterControlChip(footerCommandLabel, "<ctrl-g>", true, styles)
+	footer := renderStatusFooter(false, false, false, "", "<ctrl-?>", "<ctrl-g>", true, true, 120, styles)
+	if !strings.Contains(footer, helpChip) {
+		t.Fatal("active help footer chip does not use active status style")
+	}
+	if !strings.Contains(footer, commandChip) {
+		t.Fatal("active command footer chip does not use active status style")
+	}
+}
+
+func TestFooterControlActiveKeyStyleUsesTintedBox(t *testing.T) {
+	styles := newStyles(theme.Default())
+	activeKeyStyle := footerControlKeyStyle(true, styles)
+	if fmt.Sprint(activeKeyStyle.GetBackground()) == fmt.Sprint(styles.statusShow.GetBackground()) {
+		t.Fatal("active footer control key style uses the glyph/status accent background")
+	}
+	if fmt.Sprint(activeKeyStyle.GetBackground()) == fmt.Sprint(styles.statusSkip.GetBackground()) {
+		t.Fatal("active footer control key style uses the inactive chip background")
+	}
+}
+
+func TestFooterControlLabelStyleUsesAccentOnlyWhenActive(t *testing.T) {
+	styles := newStyles(theme.Default())
+	if fmt.Sprint(footerControlLabelStyle(false, styles).GetBackground()) != fmt.Sprint(styles.statusSkip.GetBackground()) {
+		t.Fatal("inactive footer control label does not use the quieter chip background")
+	}
+	if fmt.Sprint(footerControlLabelStyle(true, styles).GetBackground()) != fmt.Sprint(styles.statusShow.GetBackground()) {
+		t.Fatal("active footer control label does not use the accent background")
+	}
+}
+
+func TestFooterChipsUseSymmetricPadding(t *testing.T) {
+	styles := newStyles(theme.Default())
+	for _, chip := range []string{
+		renderFooterControlChip(footerHelpLabel, "<ctrl-?>", false, styles),
+		renderFooterControlChip(footerCommandLabel, "<ctrl-g>", false, styles),
+		renderPathModeChip(false, styles),
+		renderStatusChip("HIDDEN", true, styles),
+		renderStatusChip("IGNORED", false, styles),
+	} {
+		stripped := ansi.Strip(chip)
+		if !strings.HasPrefix(stripped, " ") || !strings.HasSuffix(stripped, " ") {
+			t.Fatalf("footer chip %q does not have symmetric one-cell padding", stripped)
+		}
+	}
+}
+
+func TestFooterContentLeavesSafetyMargin(t *testing.T) {
+	styles := newStyles(theme.Default())
+	width := 32
+	footer := renderStatusFooter(false, false, false, "error: this message is intentionally long", "<ctrl-?>", "<ctrl-g>", false, false, width, styles)
+	if got, want := lipgloss.Width(footer), width-footerSafetyMargin; got > want {
+		t.Fatalf("footer width = %d, want <= %d: %q", got, want, ansi.Strip(footer))
 	}
 }
 
@@ -1953,7 +2038,7 @@ func TestMainColumnsAndFooterAlignWithSearchInset(t *testing.T) {
 		t.Fatalf("search prompt index = %d, want kind index %d:\nsearch: %q\nheader: %q", promptIndex, kindIndex, search, header)
 	}
 	kindColumnStart := kindIndex - renderedColumn(renderHeaderColumn("kind", lipgloss.NewStyle(), normalizeUIColumns(config.Columns{}).Chip.Width, lipgloss.Left), "kind")
-	footerColumnStart := renderedColumn(footer, "PATH OFF") - ((statusChipWidth - lipgloss.Width("PATH OFF")) / 2)
+	footerColumnStart := renderedColumn(footer, "help:  <ctrl-?>") - footerChipHorizontalPadding
 	if footerColumnStart != kindColumnStart {
 		t.Fatalf("footer column start = %d, want kind column start %d: %q", footerColumnStart, kindColumnStart, footer)
 	}
@@ -1973,6 +2058,70 @@ func TestMainColumnsAndFooterAlignWithSearchInset(t *testing.T) {
 	}
 	if !strings.HasSuffix(section, "    │") {
 		t.Fatalf("section divider missing one-cell-longer right inset: %q", section)
+	}
+}
+
+func TestMainViewKeepsTopFrameAndFooterSpacingWhenResultsFillWindow(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.width = 100
+	model.height = 12
+	for i := 0; i < 20; i++ {
+		model.sessions = append(model.sessions, tmux.Session{Name: fmt.Sprintf("session-%02d", i)})
+	}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	lines := strings.Split(ansi.Strip(model.View()), "\n")
+	if len(lines) != model.height {
+		t.Fatalf("view height = %d, want %d:\n%s", len(lines), model.height, ansi.Strip(model.View()))
+	}
+	if !strings.HasPrefix(lines[0], "╭") {
+		t.Fatalf("top frame missing from filled view: %q\n%s", lines[0], ansi.Strip(model.View()))
+	}
+	footerIndex := -1
+	for i, line := range lines {
+		if strings.Contains(line, "PATH OFF") && strings.Contains(line, "HIDDEN SHOW") {
+			footerIndex = i
+			break
+		}
+	}
+	if footerIndex < 1 {
+		t.Fatalf("footer missing from filled view:\n%s", ansi.Strip(model.View()))
+	}
+	if strings.Trim(lines[footerIndex-1], " │") != "" {
+		t.Fatalf("footer is not separated from results by a blank row: %q\n%s", lines[footerIndex-1], ansi.Strip(model.View()))
+	}
+}
+
+func TestCommandPaletteDoesNotDuplicateFooterAndKeepsFullFrame(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.width = 100
+	model.height = 12
+	for i := 0; i < 20; i++ {
+		model.sessions = append(model.sessions, tmux.Session{Name: fmt.Sprintf("session-%02d", i)})
+	}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlG})
+	model = updated.(Model)
+
+	view := ansi.Strip(model.View())
+	lines := strings.Split(view, "\n")
+	if len(lines) != model.height {
+		t.Fatalf("command view height = %d, want %d:\n%s", len(lines), model.height, view)
+	}
+	if !strings.HasPrefix(lines[0], "╭") {
+		t.Fatalf("top frame missing from command view: %q\n%s", lines[0], view)
+	}
+	footerCount := 0
+	for _, line := range lines {
+		if strings.Contains(line, "help:  <ctrl-?>") && strings.Contains(line, "commands:  <ctrl-g>") && strings.Contains(line, "PATH OFF") {
+			footerCount++
+		}
+	}
+	if footerCount > 1 {
+		t.Fatalf("command view footer count = %d, want <= 1:\n%s", footerCount, view)
 	}
 }
 
@@ -2386,7 +2535,7 @@ func TestPathSearchHelpRendersModeSpecificContent(t *testing.T) {
 	model.height = 34
 
 	view := model.View()
-	if !strings.Contains(view, "Path Search") || !strings.Contains(view, "<c-p>") || !strings.Contains(view, "<c-a>") {
+	if !strings.Contains(view, "Path Search") || !strings.Contains(view, "<ctrl-p>") || !strings.Contains(view, "<ctrl-a>") {
 		t.Fatalf("path search help missing expected content:\n%s", view)
 	}
 	if strings.HasPrefix(view, "Path Search") {
@@ -3957,7 +4106,7 @@ func TestCommandAndHelpHotkeysUseSelectionBarChips(t *testing.T) {
 		t.Fatalf("selected command row = %q, want hotkey chip adjacent to selection marker", got)
 	}
 
-	helpKey := "<c-?>"
+	helpKey := "<ctrl-?>"
 	helpRow := renderHelpRow(helpMatch{
 		item: helpItem{Key: helpKey, Action: "show help"},
 	}, true, styles, 80)
@@ -3965,7 +4114,7 @@ func TestCommandAndHelpHotkeysUseSelectionBarChips(t *testing.T) {
 	if !strings.Contains(helpRow, selectedHelpChip) {
 		t.Fatal("selected help hotkey does not use the selection bar style")
 	}
-	if got := ansi.Strip(renderPopupSelectionMarker(true, styles) + helpRow); !strings.HasPrefix(got, "▌ <c-?> ") {
+	if got := ansi.Strip(renderPopupSelectionMarker(true, styles) + helpRow); !strings.HasPrefix(got, "▌ <ctrl-?> ") {
 		t.Fatalf("selected help row = %q, want hotkey chip adjacent to selection marker", got)
 	}
 }
@@ -3987,7 +4136,7 @@ func TestCommandAndHelpHotkeysUseChipStyleWhenNotSelected(t *testing.T) {
 		t.Fatal("command hotkey does not use the chip style")
 	}
 
-	helpKey := "<c-?>"
+	helpKey := "<ctrl-?>"
 	helpRow := renderHelpRow(helpMatch{
 		item: helpItem{Key: helpKey, Action: "show help"},
 	}, false, styles, 80)
@@ -4005,7 +4154,7 @@ func TestCommandAndHelpHotkeysUseChipStyleWhenNotSelected(t *testing.T) {
 func TestCommandAndHelpHotkeyChipsShowCombinedBindingsInFull(t *testing.T) {
 	styles := newStyles(theme.Default())
 
-	commandKey := "<esc> / <c-g>"
+	commandKey := "<esc> / <ctrl-g>"
 	commandRow := ansi.Strip(renderCommandRow(commandMatch{
 		item: commandItem{Title: "Close commands", Key: commandKey, Enabled: true},
 	}, false, styles, 80))
@@ -4013,7 +4162,7 @@ func TestCommandAndHelpHotkeyChipsShowCombinedBindingsInFull(t *testing.T) {
 		t.Fatalf("command row = %q, want full hotkey %q", commandRow, commandKey)
 	}
 
-	helpKey := "<esc> / <c-?>"
+	helpKey := "<esc> / <ctrl-?>"
 	helpRow := ansi.Strip(renderHelpRow(helpMatch{
 		item: helpItem{Key: helpKey, Action: "close help"},
 	}, false, styles, 80))
@@ -4026,7 +4175,7 @@ func TestCommandAndHelpPopupsShowHelpHotkey(t *testing.T) {
 	styles := newStyles(theme.Default())
 	dialogs := config.Dialogs{Panel: config.DialogSize{Width: 88, Height: 0}}
 	keys := config.Default().UI.Keys
-	const helpKey = "<c-?>"
+	const helpKey = "<ctrl-?>"
 	commandMatches := make([]commandMatch, 0, len(browseCommandSpecsFor(keys)))
 	for _, spec := range browseCommandSpecsFor(keys) {
 		commandMatches = append(commandMatches, commandMatch{item: commandItemFromSpec(spec, true, "")})
@@ -4077,7 +4226,7 @@ func TestCommandAndHelpRowsShowConfiguredHotkeysInFull(t *testing.T) {
 	for _, spec := range append(browseCommandSpecsFor(keys), pathSearchCommandSpecsFor(keys)...) {
 		row := ansi.Strip(renderCommandRow(commandMatch{
 			item: commandItemFromSpec(spec, true, ""),
-		}, false, styles, 100))
+		}, false, styles, 120))
 		if !strings.Contains(row, spec.Key) {
 			t.Fatalf("command row = %q, want full hotkey %q", row, spec.Key)
 		}
@@ -4085,7 +4234,7 @@ func TestCommandAndHelpRowsShowConfiguredHotkeysInFull(t *testing.T) {
 
 	for _, currentMode := range []mode{modeBrowse, modeCommands, modePathSearch} {
 		for _, item := range helpItemsForModeWithKeys(currentMode, keys) {
-			row := ansi.Strip(renderHelpRow(helpMatch{item: item}, false, styles, 100))
+			row := ansi.Strip(renderHelpRow(helpMatch{item: item}, false, styles, 120))
 			if !strings.Contains(row, item.Key) {
 				t.Fatalf("help row for mode %v = %q, want full hotkey %q", currentMode, row, item.Key)
 			}
@@ -4709,7 +4858,7 @@ func TestPanelDialogsShareConfiguredWidthAndAutoHeight(t *testing.T) {
 		item: commandItem{
 			ID:          commandHelp,
 			Title:       "Show help",
-			Key:         "<c-?>",
+			Key:         "<ctrl-?>",
 			Description: "Show help for the command palette.",
 			Enabled:     true,
 		},

@@ -246,6 +246,7 @@ type styles struct {
 	popupAccent   lipgloss.Style
 	statusShow    lipgloss.Style
 	statusSkip    lipgloss.Style
+	statusControl lipgloss.Style
 	muted         lipgloss.Style
 	error         lipgloss.Style
 	warn          lipgloss.Style
@@ -374,6 +375,11 @@ func newStyles(activeTheme theme.Theme) styles {
 			Bold(true).
 			Foreground(lipgloss.Color(activeTheme.Muted)).
 			Background(lipgloss.Color(activeTheme.ChipBG)).
+			Padding(0, 1),
+		statusControl: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color(activeTheme.Query)).
+			Background(selectedBackground).
 			Padding(0, 1),
 		muted:       lipgloss.NewStyle().Foreground(lipgloss.Color(activeTheme.Muted)).Background(background),
 		error:       lipgloss.NewStyle().Foreground(lipgloss.Color("#ff6b6b")).Background(background),
@@ -1242,7 +1248,7 @@ func (m Model) View() string {
 		b.WriteString("\n")
 	}
 
-	appendAnchoredFooter(&b, renderInsetRow(renderFooterAlignedRow(renderStatusFooter(false, m.discovery.SkipHidden, m.discovery.SkipGitignored, "", contentWidth-searchBoxInnerOffset, s), s), m.innerWidth(), s), m.innerHeight())
+	appendAnchoredFooter(&b, renderInsetRow(renderFooterAlignedRow(renderStatusFooter(false, m.discovery.SkipHidden, m.discovery.SkipGitignored, "", keyListLabel(m.keys.Browse.Help), keyListLabel(m.keys.Browse.CommandPalette), m.footerHelpActive(), m.footerCommandActive(), contentWidth-searchBoxInnerOffset, s), s), m.innerWidth(), s), m.innerHeight())
 	return m.renderWithOverlay(b.String())
 }
 
@@ -1297,8 +1303,16 @@ func (m Model) pathSearchView() string {
 	if m.pathErr != nil {
 		footerHelp = "error: " + m.pathErr.Error()
 	}
-	appendAnchoredFooter(&b, renderInsetRow(renderFooterAlignedRow(renderStatusFooter(true, m.pathConfig.options.SkipHidden, m.pathConfig.options.SkipGitignored, footerHelp, contentWidth-searchBoxInnerOffset, s), s), m.innerWidth(), s), m.innerHeight())
+	appendAnchoredFooter(&b, renderInsetRow(renderFooterAlignedRow(renderStatusFooter(true, m.pathConfig.options.SkipHidden, m.pathConfig.options.SkipGitignored, footerHelp, keyListLabel(m.keys.PathSearch.Help), keyListLabel(m.keys.PathSearch.CommandPalette), m.footerHelpActive(), m.footerCommandActive(), contentWidth-searchBoxInnerOffset, s), s), m.innerWidth(), s), m.innerHeight())
 	return m.renderWithOverlay(b.String())
+}
+
+func (m Model) footerHelpActive() bool {
+	return m.mode == modeHelp
+}
+
+func (m Model) footerCommandActive() bool {
+	return m.mode == modeCommands || (m.mode == modeHelp && m.previousMode == modeCommands)
 }
 
 func appendAnchoredFooter(b *strings.Builder, footer string, height int) {
@@ -3868,14 +3882,11 @@ func searchBoxTextInset() int {
 	return 2
 }
 
-func renderStatusFooter(pathMode bool, skipHidden bool, skipGitignored bool, help string, width int, s styles) string {
-	footer := renderPathModeChip(pathMode, s) +
-		s.root.Render(" ") +
-		renderStatusChip("HIDDEN", skipHidden, s) +
-		s.root.Render(" ") +
-		renderStatusChip("IGNORED", skipGitignored, s)
-	if strings.TrimSpace(help) != "" {
-		footer += s.root.Render("  ") + s.muted.Render(help)
+func renderStatusFooter(pathMode bool, skipHidden bool, skipGitignored bool, helpText string, helpKey string, commandKey string, helpActive bool, commandActive bool, width int, s styles) string {
+	width = footerContentWidth(width)
+	footer := renderStatusFooterParts(pathMode, skipHidden, skipGitignored, helpText, helpKey, commandKey, helpActive, commandActive, true, s)
+	if strings.TrimSpace(helpText) != "" && width > 0 && lipgloss.Width(footer) > width {
+		footer = renderStatusFooterParts(pathMode, skipHidden, skipGitignored, helpText, helpKey, commandKey, helpActive, commandActive, false, s)
 	}
 	if width > 0 && lipgloss.Width(footer) > width {
 		return ansi.Cut(footer, 0, width)
@@ -3883,27 +3894,104 @@ func renderStatusFooter(pathMode bool, skipHidden bool, skipGitignored bool, hel
 	return footer
 }
 
+func renderStatusFooterParts(pathMode bool, skipHidden bool, skipGitignored bool, helpText string, helpKey string, commandKey string, helpActive bool, commandActive bool, includeControls bool, s styles) string {
+	parts := make([]string, 0, 6)
+	if includeControls {
+		parts = append(parts,
+			renderFooterControlChip(footerHelpLabel, helpKey, helpActive, s),
+			renderFooterControlChip(footerCommandLabel, commandKey, commandActive, s),
+			renderFooterSeparator(s),
+		)
+	}
+	parts = append(parts,
+		renderPathModeChip(pathMode, s),
+		renderStatusChip("HIDDEN", skipHidden, s),
+		renderStatusChip("IGNORED", skipGitignored, s),
+	)
+	if strings.TrimSpace(helpText) != "" {
+		parts = append(parts, s.muted.Render(helpText))
+	}
+	return strings.Join(parts, s.root.Render(" "))
+}
+
+func renderFooterSeparator(s styles) string {
+	return s.muted.Render("│")
+}
+
+func footerContentWidth(width int) int {
+	if width <= 0 {
+		return width
+	}
+	width -= footerSafetyMargin
+	if width < 1 {
+		return 1
+	}
+	return width
+}
+
+func renderFooterControlChip(label string, key string, active bool, s styles) string {
+	key = strings.TrimSpace(key)
+	labelStyle := footerControlLabelStyle(active, s).
+		Padding(0, footerChipHorizontalPadding)
+	keyStyle := footerControlKeyStyle(active, s).
+		PaddingLeft(footerChipHorizontalPadding).
+		PaddingRight(footerChipHorizontalPadding)
+	return labelStyle.Render(strings.TrimSpace(label)) + keyStyle.Render(key)
+}
+
 func renderPathModeChip(active bool, s styles) string {
 	state := "OFF"
-	style := s.statusSkip
 	if active {
 		state = "ON"
-		style = s.statusShow
 	}
-	return style.Width(statusChipWidth).Align(lipgloss.Center).Render("PATH " + state)
+	return renderFooterChip("PATH "+state, active, s)
 }
 
 func renderStatusChip(label string, skip bool, s styles) string {
 	state := "SHOW"
-	style := s.statusShow
+	active := true
 	if skip {
 		state = "SKIP"
-		style = s.statusSkip
+		active = false
 	}
-	return style.Width(statusChipWidth).Align(lipgloss.Center).Render(label + " " + state)
+	return renderFooterChip(label+" "+state, active, s)
 }
 
-const statusChipWidth = 14
+func renderFooterChip(label string, active bool, s styles) string {
+	return footerChipStyle(active, s).
+		Padding(0, footerChipHorizontalPadding).
+		Align(lipgloss.Center).
+		Render(strings.TrimSpace(label))
+}
+
+func footerChipStyle(active bool, s styles) lipgloss.Style {
+	style := s.statusSkip
+	if active {
+		style = s.statusShow
+	}
+	return style
+}
+
+func footerControlKeyStyle(active bool, s styles) lipgloss.Style {
+	if active {
+		return s.statusControl
+	}
+	return s.statusSkip
+}
+
+func footerControlLabelStyle(active bool, s styles) lipgloss.Style {
+	if active {
+		return s.statusShow
+	}
+	return s.statusSkip
+}
+
+const (
+	footerHelpLabel             = "help:"
+	footerCommandLabel          = "commands:"
+	footerChipHorizontalPadding = 1
+	footerSafetyMargin          = 2
+)
 
 func truncate(value string, maxWidth int) string {
 	if maxWidth < 1 {
@@ -4311,9 +4399,9 @@ func keyListLabel(keys []string) string {
 func keyLabel(key string) string {
 	switch key {
 	case "ctrl+@":
-		return "<c-`>"
+		return "<ctrl-`>"
 	case "ctrl+_":
-		return "<c-?>"
+		return "<ctrl-?>"
 	case "shift+tab":
 		return "<s-tab>"
 	case "esc", "enter", "tab", "backspace", "alt+backspace", "meta+backspace", "up", "down", "left", "right":
@@ -4323,7 +4411,7 @@ func keyLabel(key string) string {
 		raw   string
 		label string
 	}{
-		{raw: "ctrl+", label: "c-"},
+		{raw: "ctrl+", label: "ctrl-"},
 		{raw: "alt+", label: "alt-"},
 		{raw: "meta+", label: "meta-"},
 	} {
@@ -4702,7 +4790,7 @@ func renderPopupSelectionMarker(selected bool, s styles) string {
 func renderCommandRow(match commandMatch, selected bool, s styles, width int) string {
 	item := match.item
 	const (
-		keyColumnWidth = 26
+		keyColumnWidth = 32
 		columnGap      = 2
 	)
 	key := truncate(item.Key, keyColumnWidth-2)
@@ -5289,7 +5377,7 @@ func renderHelpPanelWithKeys(s styles, dialogs config.Dialogs, keys config.KeyBi
 func renderHelpRow(match helpMatch, selected bool, s styles, width int) string {
 	item := match.item
 	const (
-		keyColumnWidth = 26
+		keyColumnWidth = 32
 		columnGap      = 2
 	)
 	key := truncate(item.Key, keyColumnWidth-2)
