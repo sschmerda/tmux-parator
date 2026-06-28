@@ -40,21 +40,22 @@ func TestParseSessions(t *testing.T) {
 	}{
 		{
 			name: "one formatted session per line",
-			out:  "main\x1f2\x1f1\x1fMon Jun  1 10:00:00 2026\x1f\x1f\x1f\x1f\x1f\x1f\x1f\x1f/Users/me\nwork\x1f1\x1f0\x1fTue Jun  2 11:00:00 2026\x1f\x1f\x1f\x1f\x1f\x1f\x1f\x1f/Users/me/work\n",
+			out:  "main\x1f2\x1f1\x1f1\x1fMon Jun  1 10:00:00 2026\x1f1780308000\x1f\x1f\x1f\x1f\x1f\x1f\x1f\x1f/Users/me\nwork\x1f1\x1f0\x1f0\x1fTue Jun  2 11:00:00 2026\x1f1780398000\x1f\x1f\x1f\x1f\x1f\x1f\x1f\x1f/Users/me/work\n",
 			want: []Session{
-				{Name: "main", Windows: "2", Attached: true, CreatedTime: "Mon Jun  1 10:00:00 2026", CurrentPath: "/Users/me"},
-				{Name: "work", Windows: "1", Attached: false, CreatedTime: "Tue Jun  2 11:00:00 2026", CurrentPath: "/Users/me/work"},
+				{Name: "main", Windows: "2", Attached: true, Current: true, CreatedTime: "Mon Jun  1 10:00:00 2026", Activity: 1780308000, CurrentPath: "/Users/me"},
+				{Name: "work", Windows: "1", Attached: false, CreatedTime: "Tue Jun  2 11:00:00 2026", Activity: 1780398000, CurrentPath: "/Users/me/work"},
 			},
 		},
 		{
 			name: "tagged parator session metadata",
-			out:  "parator-dev\x1f1\x1f0\x1fTue Jun  2 11:00:00 2026\x1f1\x1frepo\x1f/Users/me/repos/tmux-parator\x1frepos\x1ftmux-parator\x1fR\x1f#d6a84f\x1f/Users/me/repos/tmux-parator\n",
+			out:  "parator-dev\x1f1\x1f0\x1f0\x1fTue Jun  2 11:00:00 2026\x1f1780398000\x1f1\x1frepo\x1f/Users/me/repos/tmux-parator\x1frepos\x1ftmux-parator\x1fR\x1f#d6a84f\x1f/Users/me/repos/tmux-parator\n",
 			want: []Session{
 				{
 					Name:        "parator-dev",
 					Windows:     "1",
 					Attached:    false,
 					CreatedTime: "Tue Jun  2 11:00:00 2026",
+					Activity:    1780398000,
 					CurrentPath: "/Users/me/repos/tmux-parator",
 					Metadata: SessionMetadata{
 						CreatedByParator: true,

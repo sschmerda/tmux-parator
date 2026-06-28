@@ -93,6 +93,57 @@ func TestRebuildCandidatesCombinesSessionsAndRoots(t *testing.T) {
 	}
 }
 
+func TestRebuildCandidatesSortsOpenSessionsByCurrentThenActivity(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.sessions = []tmux.Session{
+		{Name: "older", Activity: 100},
+		{Name: "current", Current: true, Activity: 50},
+		{Name: "recent", Activity: 200},
+	}
+
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	got := []string{
+		model.filtered[0].title(),
+		model.filtered[1].title(),
+		model.filtered[2].title(),
+	}
+	want := []string{"current", "recent", "older"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("session order = %#v, want %#v", got, want)
+	}
+}
+
+func TestDefaultBrowseCursorStartsOnSecondOpenSession(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.sessions = []tmux.Session{
+		{Name: "current", Current: true, Activity: 100},
+		{Name: "recent", Activity: 90},
+	}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	model.selectDefaultBrowseCursor()
+
+	if model.cursor != 1 {
+		t.Fatalf("cursor = %d, want second open session index 1", model.cursor)
+	}
+}
+
+func TestDefaultBrowseCursorStaysOnOnlyOpenSession(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.sessions = []tmux.Session{{Name: "current", Current: true, Activity: 100}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	model.selectDefaultBrowseCursor()
+
+	if model.cursor != 0 {
+		t.Fatalf("cursor = %d, want only open session index 0", model.cursor)
+	}
+}
+
 func TestSectionHeadersSeparateSessionsAndWorkspacesWithAndWithoutFilter(t *testing.T) {
 	model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
 	model.sessions = []tmux.Session{{Name: "main"}}
@@ -172,8 +223,32 @@ func TestBrowseTabJumpsBetweenSections(t *testing.T) {
 
 	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyShiftTab})
 	model = updated.(Model)
-	if model.cursor != 0 {
-		t.Fatalf("cursor after shift-tab = %d, want first session index 0", model.cursor)
+	if model.cursor != 1 {
+		t.Fatalf("cursor after shift-tab = %d, want second session index 1", model.cursor)
+	}
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	model = updated.(Model)
+	if model.cursor != 2 {
+		t.Fatalf("cursor after shift-tab from sessions = %d, want first workspace index 2", model.cursor)
+	}
+}
+
+func TestBrowseShiftTabJumpsToPreviousSectionFromWithinCurrentSection(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.sessions = []tmux.Session{{Name: "tmux-dux"}, {Name: "other"}}
+	model.rootItems = []discovery.Candidate{
+		{RootName: "projects", Name: "tmux-dux", RelativePath: "tmux-dux", DisplayPath: "projects/tmux-dux", Mode: "repo"},
+		{RootName: "projects", Name: "notes", RelativePath: "notes", DisplayPath: "projects/notes", Mode: "repo"},
+	}
+	model.rebuildCandidates()
+	model.applyFilter()
+	model.cursor = 3
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	model = updated.(Model)
+	if model.cursor != 1 {
+		t.Fatalf("cursor after shift-tab from workspace section = %d, want second session index 1", model.cursor)
 	}
 }
 

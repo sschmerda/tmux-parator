@@ -71,7 +71,9 @@ type Session struct {
 	Name        string
 	Windows     string
 	Attached    bool
+	Current     bool
 	CreatedTime string
+	Activity    int64
 	CurrentPath string
 	Metadata    SessionMetadata
 }
@@ -103,7 +105,9 @@ func (c Client) ListSessions(ctx context.Context) ([]Session, error) {
 		"#{session_name}",
 		"#{session_windows}",
 		"#{session_attached}",
+		"#{==:#{session_name},#{client_session}}",
 		"#{session_created_string}",
+		"#{session_activity}",
 		"#{@tmux-parator.created}",
 		"#{@tmux-parator.kind}",
 		"#{@tmux-parator.path}",
@@ -1039,31 +1043,37 @@ func ParseSessions(out []byte) []Session {
 			session.Attached = strings.TrimSpace(parts[2]) != "0"
 		}
 		if len(parts) > 3 {
-			session.CreatedTime = strings.TrimSpace(parts[3])
+			session.Current = strings.TrimSpace(parts[3]) == "1"
 		}
 		if len(parts) > 4 {
-			session.Metadata.CreatedByParator = strings.TrimSpace(parts[4]) != ""
+			session.CreatedTime = strings.TrimSpace(parts[4])
 		}
 		if len(parts) > 5 {
-			session.Metadata.Kind = strings.TrimSpace(parts[5])
+			session.Activity, _ = strconv.ParseInt(strings.TrimSpace(parts[5]), 10, 64)
 		}
 		if len(parts) > 6 {
-			session.Metadata.Path = strings.TrimSpace(parts[6])
+			session.Metadata.CreatedByParator = strings.TrimSpace(parts[6]) != ""
 		}
 		if len(parts) > 7 {
-			session.Metadata.Root = strings.TrimSpace(parts[7])
+			session.Metadata.Kind = strings.TrimSpace(parts[7])
 		}
 		if len(parts) > 8 {
-			session.Metadata.BaseName = strings.TrimSpace(parts[8])
+			session.Metadata.Path = strings.TrimSpace(parts[8])
 		}
 		if len(parts) > 9 {
-			session.Metadata.Glyph = strings.TrimSpace(parts[9])
+			session.Metadata.Root = strings.TrimSpace(parts[9])
 		}
 		if len(parts) > 10 {
-			session.Metadata.GlyphColor = strings.TrimSpace(parts[10])
+			session.Metadata.BaseName = strings.TrimSpace(parts[10])
 		}
 		if len(parts) > 11 {
-			session.CurrentPath = strings.TrimSpace(parts[11])
+			session.Metadata.Glyph = strings.TrimSpace(parts[11])
+		}
+		if len(parts) > 12 {
+			session.Metadata.GlyphColor = strings.TrimSpace(parts[12])
+		}
+		if len(parts) > 13 {
+			session.CurrentPath = strings.TrimSpace(parts[13])
 		}
 		sessions = append(sessions, session)
 	}

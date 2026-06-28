@@ -2,6 +2,7 @@ package ui
 
 import (
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/sschmerda/tmux-parator/internal/discovery"
@@ -45,6 +46,7 @@ const (
 )
 
 func candidatesFromSessions(sessions []tmux.Session, origins map[string]string, roots []discovery.Candidate) []candidate {
+	sessions = sortedSessions(sessions)
 	items := make([]candidate, 0, len(sessions))
 	for _, session := range sessions {
 		item := candidate{kind: candidateSession, session: session, origin: origins[session.Name]}
@@ -52,6 +54,22 @@ func candidatesFromSessions(sessions []tmux.Session, origins map[string]string, 
 		items = append(items, item)
 	}
 	return items
+}
+
+func sortedSessions(sessions []tmux.Session) []tmux.Session {
+	sorted := append([]tmux.Session(nil), sessions...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		left := sorted[i]
+		right := sorted[j]
+		if left.Current != right.Current {
+			return left.Current
+		}
+		if left.Activity != right.Activity {
+			return left.Activity > right.Activity
+		}
+		return strings.ToLower(left.Name) < strings.ToLower(right.Name)
+	})
+	return sorted
 }
 
 func candidatesFromRoots(roots []discovery.Candidate) []candidate {

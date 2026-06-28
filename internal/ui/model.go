@@ -406,6 +406,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sessions = msg.sessions
 			m.rebuildCandidates()
 			m.applyFilter()
+			m.selectDefaultBrowseCursor()
 		}
 		return m, nil
 	case switchedMsg:
@@ -2032,26 +2033,20 @@ func (m *Model) jumpBrowseSection(direction int) {
 	if len(starts) == 0 {
 		return
 	}
+	current := 0
+	for i, start := range starts {
+		if start > m.cursor {
+			break
+		}
+		current = i
+	}
+	next := current
 	if direction >= 0 {
-		for _, start := range starts {
-			if start > m.cursor {
-				m.cursor = start
-				m.ensureCursorVisible()
-				return
-			}
-		}
-		m.cursor = starts[0]
-		m.ensureCursorVisible()
-		return
+		next = (current + 1) % len(starts)
+	} else {
+		next = (current - 1 + len(starts)) % len(starts)
 	}
-	for i := len(starts) - 1; i >= 0; i-- {
-		if starts[i] < m.cursor {
-			m.cursor = starts[i]
-			m.ensureCursorVisible()
-			return
-		}
-	}
-	m.cursor = starts[len(starts)-1]
+	m.cursor = m.browseSectionEntryIndex(starts[next])
 	m.ensureCursorVisible()
 }
 
@@ -2063,6 +2058,24 @@ func (m Model) sectionStartIndexes() []int {
 		}
 	}
 	return starts
+}
+
+func (m *Model) selectDefaultBrowseCursor() {
+	if strings.TrimSpace(m.filter) != "" || len(m.filtered) == 0 {
+		return
+	}
+	m.cursor = m.browseSectionEntryIndex(0)
+	m.ensureCursorVisible()
+}
+
+func (m Model) browseSectionEntryIndex(start int) int {
+	if start < 0 || start >= len(m.filtered) {
+		return clampIndex(start, len(m.filtered))
+	}
+	if m.filtered[start].kind == candidateSession && start+1 < len(m.filtered) && m.filtered[start+1].kind == candidateSession {
+		return start + 1
+	}
+	return start
 }
 
 func (m *Model) clampPathCursor() {
