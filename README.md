@@ -73,6 +73,7 @@ Main list:
 | Key | Action |
 | --- | --- |
 | `Up` / `Down` | Move selection one row. |
+| Mouse wheel / scroll keys | Move selection one row per wheel tick. |
 | `Ctrl-y` / `Ctrl-e` | Scroll the result viewport up/down one row, keeping the selection visible. |
 | `PgUp` / `Ctrl-b` | Move selection up by half a page. |
 | `PgDown` / `Ctrl-d` | Move selection down by half a page. |
@@ -119,6 +120,7 @@ Command palette, template picker, and help:
 | Key | Action |
 | --- | --- |
 | `Up` / `Down` | Move selection one row. |
+| Mouse wheel / scroll keys | Move selection one row per wheel tick. |
 | `Ctrl-y` / `Ctrl-e` | Scroll the popup viewport up/down one row. |
 | `PgUp` / `Ctrl-b` | Move selection up by half a page. |
 | `PgDown` / `Ctrl-d` | Move selection down by half a page. |

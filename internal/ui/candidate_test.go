@@ -583,6 +583,124 @@ func TestCursorMovementScrollsCandidateList(t *testing.T) {
 	}
 }
 
+func TestMouseWheelMovesBrowseCursor(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.height = 14
+	for i := 0; i < 10; i++ {
+		model.sessions = append(model.sessions, tmux.Session{Name: fmt.Sprintf("session-%02d", i)})
+	}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	updated, _ := model.Update(tea.MouseMsg(tea.MouseEvent{
+		Type:   tea.MouseWheelDown,
+		Button: tea.MouseButtonWheelDown,
+		Action: tea.MouseActionPress,
+	}))
+	model = updated.(Model)
+	if model.cursor != 1 {
+		t.Fatalf("after wheel down cursor=%d, want 1", model.cursor)
+	}
+
+	updated, _ = model.Update(tea.MouseMsg(tea.MouseEvent{
+		Type:   tea.MouseWheelUp,
+		Button: tea.MouseButtonWheelUp,
+		Action: tea.MouseActionPress,
+	}))
+	model = updated.(Model)
+	if model.cursor != 0 {
+		t.Fatalf("after wheel up cursor=%d, want 0", model.cursor)
+	}
+}
+
+func TestMouseWheelThrottlesSameDirectionBursts(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.height = 14
+	for i := 0; i < 10; i++ {
+		model.sessions = append(model.sessions, tmux.Session{Name: fmt.Sprintf("session-%02d", i)})
+	}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	wheelDown := tea.MouseMsg(tea.MouseEvent{
+		Type:   tea.MouseWheelDown,
+		Button: tea.MouseButtonWheelDown,
+		Action: tea.MouseActionPress,
+	})
+	filter := MessageFilter()
+	if filter(model, wheelDown) == nil {
+		t.Fatal("first wheel-down message was filtered, want accepted")
+	}
+	updated, _ := model.Update(wheelDown)
+	model = updated.(Model)
+	if filter(model, wheelDown) != nil {
+		t.Fatal("second immediate wheel-down message was accepted, want filtered")
+	}
+
+	if filter(model, tea.MouseMsg(tea.MouseEvent{
+		Type:   tea.MouseWheelUp,
+		Button: tea.MouseButtonWheelUp,
+		Action: tea.MouseActionPress,
+	})) == nil {
+		t.Fatal("immediate wheel reversal was filtered, want accepted")
+	}
+}
+
+func TestMouseWheelFiltersBoundaryEvents(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.height = 14
+	for i := 0; i < 3; i++ {
+		model.sessions = append(model.sessions, tmux.Session{Name: fmt.Sprintf("session-%02d", i)})
+	}
+	model.rebuildCandidates()
+	model.applyFilter()
+	filter := MessageFilter()
+
+	if filter(model, tea.MouseMsg(tea.MouseEvent{
+		Type:   tea.MouseWheelUp,
+		Button: tea.MouseButtonWheelUp,
+		Action: tea.MouseActionPress,
+	})) != nil {
+		t.Fatal("wheel up at first row was accepted, want filtered")
+	}
+
+	model.cursor = len(model.filtered) - 1
+	if filter(model, tea.MouseMsg(tea.MouseEvent{
+		Type:   tea.MouseWheelDown,
+		Button: tea.MouseButtonWheelDown,
+		Action: tea.MouseActionPress,
+	})) != nil {
+		t.Fatal("wheel down at last row was accepted, want filtered")
+	}
+}
+
+func TestMouseWheelMovesPopupCursor(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.width = 100
+	model.height = 20
+	model.openCommands(modeBrowse)
+
+	updated, _ := model.Update(tea.MouseMsg(tea.MouseEvent{
+		Type:   tea.MouseWheelDown,
+		Button: tea.MouseButtonWheelDown,
+		Action: tea.MouseActionPress,
+	}))
+	model = updated.(Model)
+	if model.commandCursor != 1 {
+		t.Fatalf("after wheel down commandCursor=%d, want 1", model.commandCursor)
+	}
+
+	updated, _ = model.Update(tea.MouseMsg(tea.MouseEvent{
+		Type:   tea.MouseWheelUp,
+		Button: tea.MouseButtonWheelUp,
+		Action: tea.MouseActionPress,
+	}))
+	model = updated.(Model)
+	if model.commandCursor != 0 {
+		t.Fatalf("after wheel up commandCursor=%d, want 0", model.commandCursor)
+	}
+}
+
 func TestBrowseScrollAndPageKeys(t *testing.T) {
 	model := NewModel(nil, theme.Default(), nil, discovery.Options{SkipHidden: true}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
 	model.height = 14

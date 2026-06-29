@@ -162,6 +162,7 @@ type Model struct {
 }
 
 const noTemplatePickerName = "No template"
+const wheelThrottleInterval = 12 * time.Millisecond
 
 func noTemplatePickerItem() sessionconfig.Template {
 	return sessionconfig.Template{
@@ -548,11 +549,130 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.clearQuickSwitch()
 		}
 		return m, nil
+	case tea.MouseMsg:
+		return m.updateMouse(msg)
 	case tea.KeyMsg:
 		return m.updateKey(msg)
 	}
 
 	return m, nil
+}
+
+func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	event := tea.MouseEvent(msg)
+	if !event.IsWheel() {
+		return m, nil
+	}
+
+	delta := 0
+	switch event.Button {
+	case tea.MouseButtonWheelUp:
+		delta = -1
+	case tea.MouseButtonWheelDown:
+		delta = 1
+	default:
+		return m, nil
+	}
+
+	switch m.mode {
+	case modeBrowse:
+		m.moveBrowseCursor(delta)
+	case modePathSearch:
+		m.movePathCursor(delta)
+	case modeCommands:
+		m.moveCommandCursor(delta)
+	case modeHelp:
+		m.moveHelpCursor(delta)
+	case modeTemplatePicker:
+		m.moveTemplateCursor(delta)
+	case modeTemplateParameter:
+		m.moveParameterCursor(delta)
+	}
+	return m, nil
+}
+
+func MessageFilter() func(tea.Model, tea.Msg) tea.Msg {
+	var lastWheelAt time.Time
+	var lastWheelDirection int
+
+	return func(model tea.Model, msg tea.Msg) tea.Msg {
+		mouse, ok := msg.(tea.MouseMsg)
+		if !ok {
+			return msg
+		}
+		event := tea.MouseEvent(mouse)
+		if !event.IsWheel() {
+			return msg
+		}
+
+		delta := 0
+		switch event.Button {
+		case tea.MouseButtonWheelUp:
+			delta = -1
+		case tea.MouseButtonWheelDown:
+			delta = 1
+		default:
+			return nil
+		}
+
+		m, ok := model.(Model)
+		if !ok {
+			return msg
+		}
+		if !m.canMoveWheel(delta) {
+			return nil
+		}
+
+		now := time.Now()
+		if delta == lastWheelDirection && now.Sub(lastWheelAt) < wheelThrottleInterval {
+			return nil
+		}
+		lastWheelAt = now
+		lastWheelDirection = delta
+		return msg
+	}
+}
+
+func (m Model) canMoveWheel(delta int) bool {
+	if delta == 0 {
+		return false
+	}
+
+	cursor := 0
+	total := 0
+	switch m.mode {
+	case modeBrowse:
+		cursor = m.cursor
+		total = len(m.filtered)
+	case modePathSearch:
+		cursor = m.pathCursor
+		total = len(m.pathResult)
+	case modeCommands:
+		cursor = m.commandCursor
+		total = len(m.commandMatches())
+	case modeHelp:
+		cursor = m.helpCursor
+		total = len(m.helpMatches())
+	case modeTemplatePicker:
+		cursor = m.templateCursor
+		total = len(m.templateFiltered)
+	case modeTemplateParameter:
+		parameter, ok := m.currentTemplateParameter()
+		if !ok {
+			return false
+		}
+		cursor = m.parameterCursor
+		total = len(parameter.Options)
+	default:
+		return false
+	}
+	if total <= 0 {
+		return false
+	}
+	if delta < 0 {
+		return cursor > 0
+	}
+	return cursor < total-1
 }
 
 func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -3371,6 +3491,15 @@ func (m Model) currentTemplateParameter() (sessionconfig.Parameter, bool) {
 		return sessionconfig.Parameter{}, false
 	}
 	return m.parameterTemplate.Parameters[m.parameterIndex], true
+}
+
+func (m *Model) moveParameterCursor(delta int) {
+	parameter, ok := m.currentTemplateParameter()
+	if !ok || len(parameter.Options) == 0 {
+		m.parameterCursor = 0
+		return
+	}
+	m.parameterCursor = clampIndex(m.parameterCursor+delta, len(parameter.Options))
 }
 
 func (m *Model) clearTemplateParameters() {

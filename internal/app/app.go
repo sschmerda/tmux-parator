@@ -106,7 +106,7 @@ Bindings can be changed under [ui.keys] in config.toml.`)
 		return err
 	}
 	model := ui.NewModelWithTemplateMemoryAndQuickSwitch(client, activeTheme, cfg.Roots, discovery.OptionsFromConfig(cfg.Discovery), cfg.PathSearch, cfg.UI.Glyphs, cfg.UI.GlyphColors, cfg.UI.Columns, cfg.UI.Keys, cfg.UI.QuickSwitch, sessionCfg.Templates, memory, cfg.UI.Dialogs)
-	_, err = tea.NewProgram(model, tea.WithAltScreen()).Run()
+	_, err = tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithFilter(ui.MessageFilter())).Run()
 	return err
 }
 
