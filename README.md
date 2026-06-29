@@ -35,6 +35,8 @@ tmux-parator --popup
 
 - Go toolchain for development
 - `tmux` at runtime
+- A terminal or tmux pane at least `60x8` cells. Smaller panes show a compact
+  "tmux-parator needs at least 60x8" message instead of the full TUI.
 
 ## Controls
 

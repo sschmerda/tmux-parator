@@ -2268,6 +2268,54 @@ func TestMainViewRendersRoundedAppFrame(t *testing.T) {
 	}
 }
 
+func TestTooSmallViewReplacesNormalBrowseLayout(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.width = minTerminalWidth - 1
+	model.height = 16
+	model.sessions = []tmux.Session{{Name: "main"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	view := ansi.Strip(model.View())
+	if !strings.Contains(view, "tmux-parator needs at least 60x8") {
+		t.Fatalf("too-small view missing size message:\n%s", view)
+	}
+	if strings.Contains(view, "kind") || strings.Contains(view, "OPEN SESSIONS") {
+		t.Fatalf("too-small view rendered normal browse layout:\n%s", view)
+	}
+}
+
+func TestTooSmallViewUsesHeightThreshold(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.width = minTerminalWidth
+	model.height = minTerminalHeight - 1
+	model.sessions = []tmux.Session{{Name: "main"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	view := ansi.Strip(model.View())
+	if !strings.Contains(view, "tmux-parator needs at least 60x8") {
+		t.Fatalf("too-small height view missing size message:\n%s", view)
+	}
+}
+
+func TestMinimumSizeStillRendersNormalBrowseLayout(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.width = minTerminalWidth
+	model.height = minTerminalHeight
+	model.sessions = []tmux.Session{{Name: "main"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	view := ansi.Strip(model.View())
+	if strings.Contains(view, "tmux-parator needs at least") {
+		t.Fatalf("minimum size rendered too-small view:\n%s", view)
+	}
+	if !strings.Contains(view, "kind") {
+		t.Fatalf("minimum size missing normal browse chrome:\n%s", view)
+	}
+}
+
 func TestMainSearchBoxIsInsetFromAppFrame(t *testing.T) {
 	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
 	model.width = 80

@@ -1234,6 +1234,9 @@ func (m Model) updatePathSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() string {
+	if m.tooSmall() {
+		return m.tooSmallView()
+	}
 	if m.showsPathSearchBase() {
 		return m.pathSearchView()
 	}
@@ -1449,6 +1452,66 @@ func (m Model) renderWithOverlay(content string) string {
 		base = placeCenteredOverlay(base, renderErrorPopupWithKeys(m.styles, m.dialogs, dismissKeys(m.keys.Browse.Quit), m.keys.Browse.Reload, message, innerWidth, innerHeight), innerWidth, innerHeight)
 	}
 	return m.styles.appFrame.Width(innerWidth).Height(innerHeight).Render(base)
+}
+
+const minTerminalWidth = 60
+const minTerminalHeight = 8
+
+func (m Model) tooSmall() bool {
+	if m.width <= 0 || m.height <= 0 {
+		return false
+	}
+	return m.width < minTerminalWidth || m.height < minTerminalHeight
+}
+
+func (m Model) tooSmallView() string {
+	width := m.width
+	height := m.height
+	if width < 1 {
+		width = 1
+	}
+	if height < 1 {
+		height = 1
+	}
+	message := fmt.Sprintf("tmux-parator needs at least %dx%d", minTerminalWidth, minTerminalHeight)
+	if width < 3 || height < 3 {
+		return truncate(message, width)
+	}
+	innerWidth := width - 2
+	innerHeight := height - 2
+	if innerWidth < 1 {
+		innerWidth = 1
+	}
+	if innerHeight < 1 {
+		innerHeight = 1
+	}
+	line := truncate(message, innerWidth)
+	content := placeCenteredLine(line, innerWidth, innerHeight, m.styles)
+	return m.styles.appFrame.Width(innerWidth).Height(innerHeight).Render(content)
+}
+
+func placeCenteredLine(line string, width int, height int, s styles) string {
+	if width < 1 {
+		width = 1
+	}
+	if height < 1 {
+		height = 1
+	}
+	line = truncate(line, width)
+	lineWidth := lipgloss.Width(line)
+	leftPadding := (width - lineWidth) / 2
+	if leftPadding < 0 {
+		leftPadding = 0
+	}
+	centered := s.muted.Render(strings.Repeat(" ", leftPadding)) + s.warn.Render(line)
+	centered = padLineToWidth(centered, width)
+	lines := make([]string, height)
+	for i := range lines {
+		lines[i] = s.root.Render(strings.Repeat(" ", width))
+	}
+	row := height / 2
+	lines[row] = centered
+	return strings.Join(lines, "\n")
 }
 
 func placeOverlay(base string, overlay string, width int, height int) string {
