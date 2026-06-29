@@ -1491,6 +1491,223 @@ func TestConfiguredBrowseOpenSelectedKeyReplacesDefault(t *testing.T) {
 	}
 }
 
+func TestQuickSwitchSingleDigitSwitchesVisibleSession(t *testing.T) {
+	client := &fakeSessionClient{}
+	model := NewModel(client, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.sessions = []tmux.Session{{Name: "one", Activity: 3}, {Name: "two", Activity: 2}, {Name: "three", Activity: 1}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}, Alt: true})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("Alt+2 returned nil command")
+	}
+	msg := cmd()
+	if switched, ok := msg.(switchedMsg); !ok || switched.err != nil {
+		t.Fatalf("Alt+2 command returned %#v", msg)
+	}
+	if client.switchedSession != "two" {
+		t.Fatalf("switched session = %q, want two", client.switchedSession)
+	}
+	if model.quickSwitchInput != "" {
+		t.Fatalf("quickSwitchInput = %q, want empty", model.quickSwitchInput)
+	}
+}
+
+func TestQuickSwitchUsesConfiguredModifiers(t *testing.T) {
+	client := &fakeSessionClient{}
+	quickSwitch := config.Default().UI.QuickSwitch
+	quickSwitch.Modifiers = []string{"meta"}
+	model := NewModelWithTemplateMemoryAndQuickSwitch(client, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{}, config.Default().UI.Keys, quickSwitch, nil, nil)
+	model.sessions = []tmux.Session{{Name: "one", Activity: 2}, {Name: "two", Activity: 1}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("plain 2 returned quick switch command")
+	}
+
+	updated, cmd = model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}, Alt: true})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("alt+2 returned quick switch command with meta-only modifier")
+	}
+}
+
+func TestQuickSwitchTwoDigitSwitchesVisibleSession(t *testing.T) {
+	client := &fakeSessionClient{}
+	model := NewModel(client, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	for i := 1; i <= 12; i++ {
+		model.sessions = append(model.sessions, tmux.Session{Name: fmt.Sprintf("session-%02d", i), Activity: int64(100 - i)})
+	}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}, Alt: true})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("first Alt+1 returned nil timeout command")
+	}
+	if model.quickSwitchInput != "1" {
+		t.Fatalf("quickSwitchInput = %q, want 1", model.quickSwitchInput)
+	}
+	view := ansi.Strip(model.View())
+	if strings.Contains(view, "Quick switch") || strings.Contains(view, "press next alt+digit") {
+		t.Fatalf("quick switch pending state should not render popup:\n%s", view)
+	}
+	if !strings.Contains(view, "11▌") {
+		t.Fatalf("quick switch pending state should keep matching label visible:\n%s", view)
+	}
+
+	updated, cmd = model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}, Alt: true})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("second Alt+2 returned nil switch command")
+	}
+	msg := cmd()
+	if switched, ok := msg.(switchedMsg); !ok || switched.err != nil {
+		t.Fatalf("Alt+1 Alt+2 command returned %#v", msg)
+	}
+	if client.switchedSession != "session-02" {
+		t.Fatalf("switched session = %q, want session-02", client.switchedSession)
+	}
+	if model.quickSwitchInput != "" {
+		t.Fatalf("quickSwitchInput = %q, want empty", model.quickSwitchInput)
+	}
+}
+
+func TestQuickSwitchLabelsFollowFilteredSessions(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.sessions = []tmux.Session{
+		{Name: "alpha", Activity: 3},
+		{Name: "beta", Activity: 2},
+		{Name: "gamma", Activity: 1},
+	}
+	model.rootItems = []discovery.Candidate{{Name: "alpha-root", Path: "/tmp/alpha-root", Mode: "repo"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+	if label, ok := model.quickSwitchLabelForIndex(0); !ok || label != "1" {
+		t.Fatalf("unfiltered first label = %q/%v, want 1/true", label, ok)
+	}
+
+	model.updateBrowseFilter("ga")
+	if len(model.filtered) == 0 || model.filtered[0].title() != "gamma" {
+		t.Fatalf("filtered results = %#v, want gamma first", candidateTitles(model.filtered))
+	}
+	if label, ok := model.quickSwitchLabelForIndex(0); !ok || label != "1" {
+		t.Fatalf("filtered gamma label = %q/%v, want 1/true", label, ok)
+	}
+	model.clearBrowseFilter()
+	if model.filtered[0].title() != "alpha" {
+		t.Fatalf("cleared filter first = %q, want alpha", model.filtered[0].title())
+	}
+}
+
+func TestQuickSwitchSkipsRootsAndCapsAtEightyOneLabels(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	for i := 1; i <= 82; i++ {
+		model.sessions = append(model.sessions, tmux.Session{Name: fmt.Sprintf("session-%02d", i), Activity: int64(1000 - i)})
+	}
+	model.rootItems = []discovery.Candidate{{Name: "root", Path: "/tmp/root", Mode: "repo"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	if label, ok := model.quickSwitchLabelForIndex(0); !ok || label != "11" {
+		t.Fatalf("first label = %q/%v, want 11/true", label, ok)
+	}
+	if label, ok := model.quickSwitchLabelForIndex(80); !ok || label != "99" {
+		t.Fatalf("81st label = %q/%v, want 99/true", label, ok)
+	}
+	if label, ok := model.quickSwitchLabelForIndex(81); ok || label != "" {
+		t.Fatalf("82nd label = %q/%v, want no label", label, ok)
+	}
+	if label, ok := model.quickSwitchLabelForIndex(82); ok || label != "" {
+		t.Fatalf("root label = %q/%v, want no label", label, ok)
+	}
+}
+
+func TestQuickSwitchPendingAbortsOnPlainDigitAndTimeout(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	for i := 1; i <= 10; i++ {
+		model.sessions = append(model.sessions, tmux.Session{Name: fmt.Sprintf("session-%02d", i), Activity: int64(100 - i)})
+	}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	updated, _ := model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}, Alt: true})
+	model = updated.(Model)
+	if model.quickSwitchInput != "1" {
+		t.Fatalf("quickSwitchInput = %q, want 1", model.quickSwitchInput)
+	}
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("plain digit after pending quick switch returned command")
+	}
+	if model.quickSwitchInput != "" {
+		t.Fatalf("quickSwitchInput after plain digit = %q, want empty", model.quickSwitchInput)
+	}
+
+	updated, _ = model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}, Alt: true})
+	model = updated.(Model)
+	token := model.quickSwitchToken
+	updated, _ = model.Update(quickSwitchTimeoutMsg{token: token})
+	model = updated.(Model)
+	if model.quickSwitchInput != "" {
+		t.Fatalf("quickSwitchInput after timeout = %q, want empty", model.quickSwitchInput)
+	}
+}
+
+func TestBrowseQuickSwitchGutterKeepsColumnsAligned(t *testing.T) {
+	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
+	model.width = 120
+	model.height = 20
+	model.sessions = []tmux.Session{{Name: "main", Metadata: tmux.SessionMetadata{Path: "/tmp/main"}}}
+	model.rootItems = []discovery.Candidate{{Name: "root", Path: "/tmp/root", Mode: "repo"}}
+	model.rebuildCandidates()
+	model.applyFilter()
+
+	view := ansi.Strip(model.View())
+	header := headerLine(view)
+	sessionLine := ""
+	rootLine := ""
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, "main") {
+			sessionLine = line
+		}
+		if strings.Contains(line, "root") && !strings.Contains(line, "kind") {
+			rootLine = line
+		}
+	}
+	if header == "" || sessionLine == "" || rootLine == "" {
+		t.Fatalf("missing lines:\n%s", view)
+	}
+	headerKind := renderedColumn(header, "kind")
+	sessionKind := renderedColumn(sessionLine, "\uebc8")
+	rootKind := renderedColumn(rootLine, "\ue702")
+	if headerKind != sessionKind || headerKind != rootKind {
+		t.Fatalf("kind columns header/session/root = %d/%d/%d:\n%s\n%s\n%s", headerKind, sessionKind, rootKind, header, sessionLine, rootLine)
+	}
+	labelIndex := renderedColumn(sessionLine, "1")
+	if labelIndex < 0 || labelIndex >= sessionKind {
+		t.Fatalf("quick switch label index = %d, want before kind column %d:\n%s", labelIndex, sessionKind, sessionLine)
+	}
+}
+
+func TestQuickSwitchPendingPrefixHighlightKeepsLabelWidth(t *testing.T) {
+	styles := newStyles(theme.Default())
+	rendered := renderQuickSwitchLabel("11", "1", styles.muted, styles.popupAccent)
+	if got := lipgloss.Width(rendered); got != quickSwitchLabelWidth {
+		t.Fatalf("label width = %d, want %d", got, quickSwitchLabelWidth)
+	}
+	if ansi.Strip(rendered) != "11" {
+		t.Fatalf("rendered label text = %q, want 11", ansi.Strip(rendered))
+	}
+}
+
 func TestRunOpenLastSessionCommandCallsClient(t *testing.T) {
 	client := &fakeSessionClient{}
 	model := NewModel(client, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
@@ -2063,7 +2280,7 @@ func TestMainSearchBoxIsInsetFromAppFrame(t *testing.T) {
 	if len(lines) < 2 {
 		t.Fatalf("view has too few lines:\n%s", model.View())
 	}
-	if !strings.HasPrefix(lines[1], "│    ╭") {
+	if !strings.HasPrefix(lines[1], "│"+strings.Repeat(" ", searchBoxOuterInset())+"╭") {
 		t.Fatalf("search box not inset from frame: %q", lines[1])
 	}
 }
@@ -2112,10 +2329,10 @@ func TestMainColumnsAndFooterAlignWithSearchInset(t *testing.T) {
 	if promptIndex := renderedColumn(search, "❯"); promptIndex != kindIndex {
 		t.Fatalf("search prompt index = %d, want kind index %d:\nsearch: %q\nheader: %q", promptIndex, kindIndex, search, header)
 	}
-	kindColumnStart := kindIndex - renderedColumn(renderHeaderColumn("kind", lipgloss.NewStyle(), normalizeUIColumns(config.Columns{}).Chip.Width, lipgloss.Left), "kind")
 	footerColumnStart := renderedColumn(footer, "help:  <ctrl-?>") - footerChipHorizontalPadding
-	if footerColumnStart != kindColumnStart {
-		t.Fatalf("footer column start = %d, want kind column start %d: %q", footerColumnStart, kindColumnStart, footer)
+	wantFooterColumnStart := renderedColumn(search, "❯") - footerChipHorizontalPadding
+	if footerColumnStart != wantFooterColumnStart {
+		t.Fatalf("footer column start = %d, want %d: %q", footerColumnStart, wantFooterColumnStart, footer)
 	}
 	for name, line := range map[string]string{"search": search, "header": header, "footer": footer} {
 		if got := lipgloss.Width(line); got != model.width {
@@ -2131,8 +2348,12 @@ func TestMainColumnsAndFooterAlignWithSearchInset(t *testing.T) {
 	if !strings.HasSuffix(footer, "     │") {
 		t.Fatalf("footer missing row right inset: %q", footer)
 	}
-	if !strings.HasSuffix(section, "    │") {
-		t.Fatalf("section divider missing one-cell-longer right inset: %q", section)
+	openPadding := renderedColumn(section, "OPEN SESSIONS") - renderedColumn(section, "│") - 1
+	if openPadding < searchBoxOuterInset() {
+		t.Fatalf("section divider left padding = %d, want at least search box outer inset %d: %q", openPadding, searchBoxOuterInset(), section)
+	}
+	if !strings.HasSuffix(section, strings.Repeat(" ", openPadding)+"│") {
+		t.Fatalf("section divider right padding does not match left padding %d: %q", openPadding, section)
 	}
 }
 
@@ -2291,7 +2512,7 @@ func TestPathSearchUsesSameVisibleRowBudgetAsBrowse(t *testing.T) {
 	}
 }
 
-func TestPathSearchUsesBrowseColumnHeader(t *testing.T) {
+func TestPathSearchUsesUnnumberedColumnHeader(t *testing.T) {
 	model := NewModel(nil, theme.Default(), nil, discovery.Options{}, config.PathSearch{}, config.Glyphs{}, config.GlyphColors{}, config.Columns{})
 	model.width = 96
 	model.height = 18
@@ -2347,6 +2568,14 @@ func commandTitles(items []commandItem) map[string]bool {
 	titles := make(map[string]bool, len(items))
 	for _, item := range items {
 		titles[item.Title] = true
+	}
+	return titles
+}
+
+func candidateTitles(items []candidate) []string {
+	titles := make([]string, 0, len(items))
+	for _, item := range items {
+		titles = append(titles, item.title())
 	}
 	return titles
 }

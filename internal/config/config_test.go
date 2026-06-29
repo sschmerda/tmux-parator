@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadFileMissingUsesDefaults(t *testing.T) {
@@ -58,6 +59,12 @@ func TestDefaultComesFromEmbeddedTOML(t *testing.T) {
 	if got := strings.Join(cfg.UI.Keys.Browse.RenameSession, ","); got != "ctrl+n" {
 		t.Fatalf("browse rename_session = %q, want ctrl+n", got)
 	}
+	if cfg.UI.QuickSwitch.Timeout != 750*time.Millisecond {
+		t.Fatalf("quick switch timeout = %v, want 750ms", cfg.UI.QuickSwitch.Timeout)
+	}
+	if got := strings.Join(cfg.UI.QuickSwitch.Modifiers, ","); got != "alt,meta" {
+		t.Fatalf("quick switch modifiers = %q, want alt,meta", got)
+	}
 	if !cfg.Discovery.SkipHidden {
 		t.Fatalf("skip_hidden = false, want embedded default true")
 	}
@@ -81,6 +88,55 @@ func TestDefaultComesFromEmbeddedTOML(t *testing.T) {
 	}
 	if cfg.Roots[1].Glyph != cfg.UI.Glyphs.Subdir {
 		t.Fatalf("second root glyph = %q, want subdir glyph %q", cfg.Roots[1].Glyph, cfg.UI.Glyphs.Subdir)
+	}
+}
+
+func TestLoadFileReadsUIQuickSwitchTimeout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeFile(t, path, `
+[ui.quick_switch]
+timeout = "1200ms"
+modifiers = ["ctrl"]
+`)
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile() error = %v", err)
+	}
+	if cfg.UI.QuickSwitch.Timeout != 1200*time.Millisecond {
+		t.Fatalf("quick switch timeout = %v, want 1200ms", cfg.UI.QuickSwitch.Timeout)
+	}
+	if got := strings.Join(cfg.UI.QuickSwitch.Modifiers, ","); got != "ctrl" {
+		t.Fatalf("quick switch modifiers = %q, want ctrl", got)
+	}
+}
+
+func TestLoadFileRejectsInvalidUIQuickSwitchTimeout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeFile(t, path, `
+[ui.quick_switch]
+timeout = "soon"
+`)
+	_, err := LoadFile(path)
+	if err == nil {
+		t.Fatal("LoadFile() error = nil, want invalid timeout error")
+	}
+	if !strings.Contains(err.Error(), "ui.quick_switch.timeout") {
+		t.Fatalf("LoadFile() error = %v, want quick switch timeout error", err)
+	}
+}
+
+func TestLoadFileRejectsInvalidUIQuickSwitchModifier(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeFile(t, path, `
+[ui.quick_switch]
+modifiers = ["super"]
+`)
+	_, err := LoadFile(path)
+	if err == nil {
+		t.Fatal("LoadFile() error = nil, want invalid modifier error")
+	}
+	if !strings.Contains(err.Error(), "ui.quick_switch.modifiers") {
+		t.Fatalf("LoadFile() error = %v, want quick switch modifiers error", err)
 	}
 }
 
@@ -209,6 +265,21 @@ open_selected = ["ctrl+x"]
 `)
 	if _, err := LoadFile(path); err != nil {
 		t.Fatalf("LoadFile() error = %v, want duplicate key across contexts allowed", err)
+	}
+}
+
+func TestLoadFileRejectsConfiguredQuickSwitchKeyBinding(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeFile(t, path, `
+[ui.keys.browse]
+quick_switch_1 = ["alt+1"]
+`)
+	_, err := LoadFile(path)
+	if err == nil {
+		t.Fatal("LoadFile() error = nil, want unknown quick switch key error")
+	}
+	if !strings.Contains(err.Error(), "unknown key ui.keys.browse.quick_switch_1") {
+		t.Fatalf("LoadFile() error = %v, want unknown quick switch key error", err)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -75,6 +76,7 @@ type Model struct {
 	glyphColors           config.GlyphColors
 	columns               config.Columns
 	dialogs               config.Dialogs
+	quickSwitch           config.QuickSwitch
 	keys                  config.KeyBindings
 	templates             []sessionconfig.Template
 	matchingTemplates     []sessionconfig.Template
@@ -137,6 +139,8 @@ type Model struct {
 	pathCompletionInput   string
 	pathCompletionRoot    string
 	pathCompletionQuery   string
+	quickSwitchInput      string
+	quickSwitchToken      int
 	pathStreamQuery       string
 	pathStream            <-chan pathsearch.Batch
 	pathCancel            context.CancelFunc
@@ -226,6 +230,10 @@ type pathCompletionsLoadedMsg struct {
 	err         error
 }
 
+type quickSwitchTimeoutMsg struct {
+	token int
+}
+
 type styles struct {
 	root          lipgloss.Style
 	title         lipgloss.Style
@@ -267,11 +275,22 @@ func NewModelWithTemplates(client sessionClient, activeTheme theme.Theme, roots 
 }
 
 func NewModelWithTemplateMemory(client sessionClient, activeTheme theme.Theme, roots []config.Root, discoveryOptions discovery.Options, pathSearch config.PathSearch, glyphs config.Glyphs, glyphColors config.GlyphColors, columns config.Columns, keys config.KeyBindings, templates []sessionconfig.Template, memory templateMemory, dialogs ...config.Dialogs) Model {
+	return NewModelWithTemplateMemoryAndQuickSwitch(client, activeTheme, roots, discoveryOptions, pathSearch, glyphs, glyphColors, columns, keys, config.Default().UI.QuickSwitch, templates, memory, dialogs...)
+}
+
+func NewModelWithTemplateMemoryAndQuickSwitch(client sessionClient, activeTheme theme.Theme, roots []config.Root, discoveryOptions discovery.Options, pathSearch config.PathSearch, glyphs config.Glyphs, glyphColors config.GlyphColors, columns config.Columns, keys config.KeyBindings, quickSwitch config.QuickSwitch, templates []sessionconfig.Template, memory templateMemory, dialogs ...config.Dialogs) Model {
 	glyphs = normalizeUIGlyphs(glyphs)
 	glyphColors = normalizeUIGlyphColors(glyphColors)
 	columns = normalizeUIColumns(columns)
 	if keyBindingsEmpty(keys) {
 		keys = config.Default().UI.Keys
+	}
+	defaultQuickSwitch := config.Default().UI.QuickSwitch
+	if quickSwitch.Timeout <= 0 {
+		quickSwitch.Timeout = defaultQuickSwitch.Timeout
+	}
+	if quickSwitch.Modifiers == nil {
+		quickSwitch.Modifiers = defaultQuickSwitch.Modifiers
 	}
 	dialogConfig := config.Dialogs{}
 	if len(dialogs) > 0 {
@@ -286,6 +305,7 @@ func NewModelWithTemplateMemory(client sessionClient, activeTheme theme.Theme, r
 		glyphColors:       glyphColors,
 		columns:           columns,
 		dialogs:           dialogConfig,
+		quickSwitch:       quickSwitch,
 		keys:              keys,
 		templates:         sessionconfig.EnabledTemplates(templates),
 		matchingTemplates: sessionconfig.EnabledTemplatesInOrder(templates),
@@ -523,6 +543,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pathCompletionCursor = -1
 		m.advancePathCompletion(msg.direction)
 		return m, m.startPathStreamPreserveCompletion(m.pathRoot)
+	case quickSwitchTimeoutMsg:
+		if msg.token == m.quickSwitchToken {
+			m.clearQuickSwitch()
+		}
+		return m, nil
 	case tea.KeyMsg:
 		return m.updateKey(msg)
 	}
@@ -655,6 +680,18 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if m.quickSwitchInput != "" {
+		if digit, ok := m.quickSwitchDigit(msg); ok {
+			input := m.quickSwitchInput + digit
+			m.clearQuickSwitch()
+			if selected, ok := m.quickSwitchCandidate(input); ok {
+				return m, m.switchSession(selected.session.Name)
+			}
+			return m, nil
+		}
+		m.clearQuickSwitch()
+	}
+
 	switch {
 	case keyMatches(msg, m.keys.Browse.Quit):
 		return m, tea.Quit
@@ -662,6 +699,8 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.openCommands(m.mode)
 	case keyMatches(msg, m.keys.Browse.OpenLastSession):
 		return m, m.switchLastSession()
+	case m.isQuickSwitchKey(msg):
+		return m.handleQuickSwitchKey(msg)
 	case keyMatches(msg, m.keys.Browse.Help):
 		m.openHelp(m.mode)
 	case keyMatches(msg, m.keys.Browse.Reload):
@@ -1238,7 +1277,8 @@ func (m Model) View() string {
 				break
 			}
 		}
-		b.WriteString(renderInsetRow(m.renderCandidateRow(item, i == m.cursor, contentWidth, columns), m.innerWidth(), s))
+		label, _ := m.quickSwitchLabelForIndex(i)
+		b.WriteString(renderInsetRow(m.renderCandidateRowWithQuickSwitchLabel(item, i == m.cursor, label, m.quickSwitchInput, contentWidth, columns), m.innerWidth(), s))
 		b.WriteString("\n")
 		rowsUsed++
 		renderedCandidates++
@@ -2105,6 +2145,124 @@ func (m Model) selectedPath() (candidate, bool) {
 		return candidate{}, false
 	}
 	return m.pathResult[m.pathCursor], true
+}
+
+func (m Model) quickSwitchDigit(msg tea.KeyMsg) (string, bool) {
+	value := msg.String()
+	for _, modifier := range m.quickSwitch.Modifiers {
+		prefix := modifier + "+"
+		if !strings.HasPrefix(value, prefix) {
+			continue
+		}
+		digit := strings.TrimPrefix(value, prefix)
+		if len(digit) == 1 && digit >= "1" && digit <= "9" {
+			return digit, true
+		}
+	}
+	return "", false
+}
+
+func (m Model) isQuickSwitchKey(msg tea.KeyMsg) bool {
+	_, ok := m.quickSwitchDigit(msg)
+	return ok
+}
+
+func (m Model) handleQuickSwitchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	digit, ok := m.quickSwitchDigit(msg)
+	if !ok {
+		return m, nil
+	}
+	visible := m.visibleQuickSwitchSessionCount()
+	if visible <= 0 {
+		return m, nil
+	}
+	if visible <= 9 {
+		selected, ok := m.quickSwitchCandidate(digit)
+		if !ok {
+			return m, nil
+		}
+		return m, m.switchSession(selected.session.Name)
+	}
+	if !m.quickSwitchPrefixExists(digit) {
+		m.clearQuickSwitch()
+		return m, nil
+	}
+	m.quickSwitchInput = digit
+	m.quickSwitchToken++
+	token := m.quickSwitchToken
+	return m, tea.Tick(m.quickSwitch.Timeout, func(time.Time) tea.Msg {
+		return quickSwitchTimeoutMsg{token: token}
+	})
+}
+
+func (m *Model) clearQuickSwitch() {
+	if m.quickSwitchInput == "" {
+		return
+	}
+	m.quickSwitchInput = ""
+	m.quickSwitchToken++
+}
+
+func (m Model) quickSwitchCandidate(label string) (candidate, bool) {
+	for index, item := range m.filtered {
+		if item.kind != candidateSession {
+			continue
+		}
+		if rowLabel, ok := m.quickSwitchLabelForIndex(index); ok && rowLabel == label {
+			return item, true
+		}
+	}
+	return candidate{}, false
+}
+
+func (m Model) quickSwitchPrefixExists(prefix string) bool {
+	for index, item := range m.filtered {
+		if item.kind != candidateSession {
+			continue
+		}
+		if label, ok := m.quickSwitchLabelForIndex(index); ok && strings.HasPrefix(label, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m Model) quickSwitchLabelForIndex(index int) (string, bool) {
+	if index < 0 || index >= len(m.filtered) || m.filtered[index].kind != candidateSession {
+		return "", false
+	}
+	count := m.visibleQuickSwitchSessionCount()
+	if count <= 0 {
+		return "", false
+	}
+	ordinal := 0
+	for i := 0; i <= index; i++ {
+		if m.filtered[i].kind == candidateSession {
+			ordinal++
+		}
+	}
+	if ordinal == 0 {
+		return "", false
+	}
+	if count <= 9 {
+		return strconv.Itoa(ordinal), true
+	}
+	if ordinal > 81 {
+		return "", false
+	}
+	tens := ((ordinal - 1) / 9) + 1
+	ones := ((ordinal - 1) % 9) + 1
+	return strconv.Itoa(tens) + strconv.Itoa(ones), true
+}
+
+func (m Model) visibleQuickSwitchSessionCount() int {
+	count := 0
+	for _, item := range m.filtered {
+		if item.kind == candidateSession {
+			count++
+		}
+	}
+	return count
 }
 
 func (m Model) confirmKillSessionName() string {
@@ -3600,6 +3758,10 @@ func (m Model) renderCandidateRow(item candidate, selected bool, width int, colu
 	return renderCandidateRow(item, selected, m.styles, width, m.glyphs, m.glyphColors, columns)
 }
 
+func (m Model) renderCandidateRowWithQuickSwitchLabel(item candidate, selected bool, label string, highlightPrefix string, width int, columns config.Columns) string {
+	return renderCandidateRowWithQuickSwitchLabel(item, selected, label, highlightPrefix, m.styles, width, m.glyphs, m.glyphColors, columns)
+}
+
 func renderCandidate(item candidate, selected bool, s styles, glyphs config.Glyphs, glyphColors config.GlyphColors, columns config.Columns) string {
 	textStyle := s.session
 	detailStyle := s.muted
@@ -3750,18 +3912,71 @@ func renderPathColumn(item candidate, detail string, detailStyle lipgloss.Style,
 }
 
 func renderCandidateRow(item candidate, selected bool, s styles, width int, glyphs config.Glyphs, glyphColors config.GlyphColors, columns config.Columns) string {
+	return renderCandidateRowWithQuickSwitchLabelAndReserve(item, selected, "", "", false, s, width, glyphs, glyphColors, columns)
+}
+
+func renderCandidateRowWithQuickSwitchLabel(item candidate, selected bool, label string, highlightPrefix string, s styles, width int, glyphs config.Glyphs, glyphColors config.GlyphColors, columns config.Columns) string {
+	return renderCandidateRowWithQuickSwitchLabelAndReserve(item, selected, label, highlightPrefix, true, s, width, glyphs, glyphColors, columns)
+}
+
+func renderCandidateRowWithQuickSwitchLabelAndReserve(item candidate, selected bool, label string, highlightPrefix string, reserveQuickSwitch bool, s styles, width int, glyphs config.Glyphs, glyphColors config.GlyphColors, columns config.Columns) string {
 	columns = normalizeUIColumns(columns)
 	columnWidth := width - searchBoxInnerOffset
 	if columnWidth < 1 {
 		columnWidth = width
 	}
 	columns = fitPathColumnToRow(item, s, glyphs, glyphColors, columns, columnWidth)
+	labelStyle := s.muted
+	labelHighlightStyle := s.popupAccent
+	if selected {
+		labelStyle = s.selected
+		labelHighlightStyle = s.selectedMatch
+	}
+	labelColumn := renderQuickSwitchLabel(label, highlightPrefix, labelStyle, labelHighlightStyle)
 	columnGap := s.root.Render(strings.Repeat(" ", searchBoxInnerOffset))
 	if selected {
+		if reserveQuickSwitch {
+			line := labelColumn + s.glyph.Render("▌") + renderCandidate(item, true, s, glyphs, glyphColors, columns)
+			return padSelectedRow(line, width, s)
+		}
 		line := s.root.Render("  ") + s.glyph.Render("▌") + renderCandidate(item, true, s, glyphs, glyphColors, columns)
 		return padSelectedRow(line, width, s)
 	}
+	if reserveQuickSwitch {
+		return fitRow(labelColumn+s.root.Render(" ")+renderCandidate(item, false, s, glyphs, glyphColors, columns), width)
+	}
 	return fitRow("  "+columnGap+renderCandidate(item, false, s, glyphs, glyphColors, columns), width)
+}
+
+func renderQuickSwitchLabel(label string, highlightPrefix string, style lipgloss.Style, highlightStyle lipgloss.Style) string {
+	label = fitQuickSwitchLabel(label)
+	highlightPrefix = strings.TrimSpace(highlightPrefix)
+	if highlightPrefix == "" || strings.TrimSpace(label) == "" || !strings.HasPrefix(strings.TrimSpace(label), highlightPrefix) {
+		return style.Render(label)
+	}
+	runes := []rune(label)
+	firstDigit := -1
+	for i, r := range runes {
+		if !unicode.IsSpace(r) {
+			firstDigit = i
+			break
+		}
+	}
+	if firstDigit < 0 {
+		return style.Render(label)
+	}
+	return style.Render(string(runes[:firstDigit])) + highlightStyle.Render(string(runes[firstDigit])) + style.Render(string(runes[firstDigit+1:]))
+}
+
+func fitQuickSwitchLabel(label string) string {
+	label = strings.TrimSpace(label)
+	if lipgloss.Width(label) > quickSwitchLabelWidth {
+		label = ansi.Cut(label, 0, quickSwitchLabelWidth)
+	}
+	if lipgloss.Width(label) < quickSwitchLabelWidth {
+		label = strings.Repeat(" ", quickSwitchLabelWidth-lipgloss.Width(label)) + label
+	}
+	return label
 }
 
 func fitPathColumnToRow(item candidate, s styles, glyphs config.Glyphs, glyphColors config.GlyphColors, columns config.Columns, width int) config.Columns {
@@ -3826,9 +4041,10 @@ func renderSearchBox(prompt string, value string, width int, s styles) string {
 	return s.searchBox.Width(boxWidth).Render(content)
 }
 
-const searchBoxSideInset = 2
+const searchBoxSideInset = 4
 const columnGutterWidth = 2
 const searchBoxInnerOffset = 1
+const quickSwitchLabelWidth = 2
 
 func renderInsetSearchBox(prompt string, value string, width int, s styles) string {
 	leftInset := searchBoxOuterInset()
@@ -5891,6 +6107,7 @@ func helpItemsForModeWithKeys(previous mode, keys config.KeyBindings) []helpItem
 		{Key: keyListLabel(keys.Browse.DeleteWord), Action: "remove word", Description: "Remove one word from the filter prompt."},
 		{Key: keyListLabel(keys.Browse.ClearInput), Action: "clear prompt", Description: "Clear the filter prompt."},
 		helpItemFromSpec(specs[0]),
+		{Key: "<alt-1>..<alt-9>", Action: "quick switch sessions", Description: "Switch by the visible open-session label; labels expand to two digits when ten or more sessions are visible."},
 		{Key: combinedKeyLabel(keys.Browse.Up, keys.Browse.Down), Action: "move selection", Description: "Move through matching sessions and root candidates."},
 		{Key: combinedKeyLabel(keys.Browse.ScrollUp, keys.Browse.ScrollDown), Action: "scroll results", Description: "Scroll the result viewport one row while keeping the selection visible."},
 		{Key: combinedKeyLabel(keys.Browse.PageUp, keys.Browse.PageDown), Action: "page results", Description: "Move the selection by half a page through matching sessions and root candidates."},

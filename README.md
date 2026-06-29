@@ -40,6 +40,7 @@ tmux-parator --popup
 
 - Type to filter tmux sessions and configured roots.
 - `Enter` opens the selected item.
+- `Alt-1` through `Alt-9` quick-switch visible open sessions by their row labels.
 - `Tab` jumps to the next main-list section; `Shift-Tab` jumps to the previous
   section.
 - `Ctrl-g` opens the fuzzy command palette.
@@ -75,6 +76,7 @@ Main list:
 | `PgDown` / `Ctrl-d` | Move selection down by half a page. |
 | `Tab` / `Shift-Tab` | Jump to the next/previous section. |
 | `Enter` | Open selected item. |
+| `Alt-1`..`Alt-9` | Quick-switch visible open sessions by label. |
 | `Ctrl-g` | Open command palette. |
 | `Ctrl-n` | Rename selected open tmux session. |
 | `Ctrl-s` | Create a named tmux session from the selected row. |
@@ -154,6 +156,16 @@ Direct session toggle:
 
 - `Ctrl-\`` switches to tmux's last active session using `tmux switch-client -l`.
 - This behaves like tmux's native last-session toggle, so pressing it repeatedly moves between the two most recent sessions.
+
+Open-session quick switch:
+
+- Visible open sessions show quick-switch labels in the left row gutter.
+- When 9 or fewer open sessions are visible, labels are `1` through `9`.
+- When 10 or more open sessions are visible, labels expand to zero-free two-digit labels: `11` through `19`, `21` through `29`, up to `91` through `99`.
+- In two-digit mode, enter both digits with `Alt`/`Meta`; while the first digit is pending, matching labels highlight that first digit inline.
+- Any other key or the configured timeout cancels the pending quick switch.
+- The timeout and modifier keys are configured under `[ui.quick_switch]`, for
+  example `timeout = "750ms"` and `modifiers = ["alt", "meta"]`.
 
 ## Fuzzy Matching
 

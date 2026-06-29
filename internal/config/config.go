@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/BurntSushi/toml"
@@ -27,6 +28,7 @@ type UI struct {
 	PopupWidth  string      `toml:"popup_width"`
 	PopupHeight string      `toml:"popup_height"`
 	Dialogs     Dialogs     `toml:"dialogs"`
+	QuickSwitch QuickSwitch `toml:"quick_switch"`
 	Keys        KeyBindings `toml:"keys"`
 	Glyphs      Glyphs      `toml:"glyphs"`
 	GlyphColors GlyphColors `toml:"glyph_colors"`
@@ -111,6 +113,11 @@ type ConfirmKeys struct {
 	Left   []string `toml:"left"`
 	Right  []string `toml:"right"`
 	Submit []string `toml:"submit"`
+}
+
+type QuickSwitch struct {
+	Timeout   time.Duration `toml:"timeout"`
+	Modifiers []string      `toml:"modifiers"`
 }
 
 type Dialogs struct {
@@ -202,6 +209,7 @@ type rawUI struct {
 	PopupWidth  string         `toml:"popup_width"`
 	PopupHeight string         `toml:"popup_height"`
 	Dialogs     rawDialogs     `toml:"dialogs"`
+	QuickSwitch rawQuickSwitch `toml:"quick_switch"`
 	Keys        rawKeyBindings `toml:"keys"`
 	Glyphs      Glyphs         `toml:"glyphs"`
 	GlyphColors GlyphColors    `toml:"glyph_colors"`
@@ -286,6 +294,11 @@ type rawConfirmKeys struct {
 	Left   []string `toml:"left"`
 	Right  []string `toml:"right"`
 	Submit []string `toml:"submit"`
+}
+
+type rawQuickSwitch struct {
+	Timeout   string   `toml:"timeout"`
+	Modifiers []string `toml:"modifiers"`
 }
 
 type rawDialogs struct {
@@ -433,11 +446,15 @@ func finalize(cfg Config) (Config, error) {
 		cfg.UI.PopupHeight = "90%"
 	}
 	cfg.UI.Dialogs = normalizeDialogs(cfg.UI.Dialogs)
+	cfg.UI.QuickSwitch = normalizeQuickSwitch(cfg.UI.QuickSwitch)
 	cfg.UI.Keys = normalizeKeyBindings(cfg.UI.Keys)
 	cfg.UI.Glyphs = normalizeGlyphs(cfg.UI.Glyphs)
 	cfg.UI.GlyphColors = normalizeGlyphColors(cfg.UI.GlyphColors)
 	cfg.UI.Columns = normalizeColumns(cfg.UI.Columns)
 	if err := validateKeyBindings(cfg.UI.Keys); err != nil {
+		return Config{}, err
+	}
+	if err := validateQuickSwitch(cfg.UI.QuickSwitch); err != nil {
 		return Config{}, err
 	}
 	cfg.Roots = normalizeRootGlyphs(cfg.Roots, cfg.UI.Glyphs)
@@ -486,11 +503,41 @@ func normalizeUI(raw rawUI, fallback UI) UI {
 		ui.PopupHeight = raw.PopupHeight
 	}
 	ui.Dialogs = mergeDialogs(raw.Dialogs, ui.Dialogs)
+	ui.QuickSwitch = mergeQuickSwitch(raw.QuickSwitch, ui.QuickSwitch)
 	ui.Keys = mergeKeyBindings(raw.Keys, ui.Keys)
 	ui.Glyphs = mergeGlyphs(raw.Glyphs, ui.Glyphs)
 	ui.GlyphColors = mergeGlyphColors(raw.GlyphColors, ui.GlyphColors)
 	ui.Columns = mergeColumns(raw.Columns, ui.Columns)
 	return ui
+}
+
+func normalizeQuickSwitch(quickSwitch QuickSwitch) QuickSwitch {
+	if quickSwitch.Timeout == 0 {
+		quickSwitch.Timeout = 750 * time.Millisecond
+	}
+	if quickSwitch.Modifiers == nil {
+		quickSwitch.Modifiers = []string{"alt", "meta"}
+	}
+	for i, modifier := range quickSwitch.Modifiers {
+		quickSwitch.Modifiers[i] = strings.ToLower(strings.TrimSpace(modifier))
+	}
+	return quickSwitch
+}
+
+func mergeQuickSwitch(raw rawQuickSwitch, fallback QuickSwitch) QuickSwitch {
+	quickSwitch := fallback
+	if strings.TrimSpace(raw.Timeout) != "" {
+		timeout, err := time.ParseDuration(strings.TrimSpace(raw.Timeout))
+		if err == nil {
+			quickSwitch.Timeout = timeout
+		} else {
+			quickSwitch.Timeout = -1
+		}
+	}
+	if raw.Modifiers != nil {
+		quickSwitch.Modifiers = append([]string(nil), raw.Modifiers...)
+	}
+	return quickSwitch
 }
 
 func normalizeDialogs(dialogs Dialogs) Dialogs {
@@ -1148,6 +1195,28 @@ func validateKeyBindings(keys KeyBindings) error {
 				seen[normalized] = action.name
 			}
 		}
+	}
+	return nil
+}
+
+func validateQuickSwitch(quickSwitch QuickSwitch) error {
+	if quickSwitch.Timeout <= 0 {
+		return fmt.Errorf("ui.quick_switch.timeout must be a positive duration")
+	}
+	if len(quickSwitch.Modifiers) == 0 {
+		return fmt.Errorf("ui.quick_switch.modifiers must include at least one modifier")
+	}
+	seen := map[string]bool{}
+	for _, modifier := range quickSwitch.Modifiers {
+		switch modifier {
+		case "alt", "meta", "ctrl":
+		default:
+			return fmt.Errorf("ui.quick_switch.modifiers contains invalid modifier %q", modifier)
+		}
+		if seen[modifier] {
+			return fmt.Errorf("ui.quick_switch.modifiers contains duplicate modifier %q", modifier)
+		}
+		seen[modifier] = true
 	}
 	return nil
 }
